@@ -1,0 +1,333 @@
+{% extends "base.html" %}
+
+{% block title %}System Logs - VulnEats{% endblock %}
+
+{% block content %}
+<style>
+    /* ==== GENERAL THEME ==== */
+    body {
+        background-color: #ffffff;
+        color: #e0e0e0;
+    }
+
+    .page-header {
+        background: linear-gradient(135deg, #ffffff, #c55a47, #cc8073);
+        color: rgb(0, 0, 0);
+        padding: 2rem 0;
+        margin: -1rem -15px 2rem -15px;
+        border-radius: 0 0 25px 25px;
+    }
+    
+    .breadcrumb-modern {
+        background: rgba(255,255,255,0.05);
+        border-radius: 25px;
+        padding: 0.5rem 1rem;
+    }
+    .breadcrumb-modern .breadcrumb-item a {
+        color: #00e6e6;
+    }
+    .breadcrumb-modern .breadcrumb-item a:hover {
+        color: #00ffff;
+    }
+    .breadcrumb-modern .breadcrumb-item.active {
+        color: #ffffff;
+    }
+
+    /* ==== CARDS ==== */
+    .modern-card {
+        background: #1e1e1e;
+        border-radius: 15px;
+        border: 1px solid rgba(255,255,255,0.05);
+        color: #e0e0e0;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        transition: transform 0.3s ease;
+    }
+    .modern-card:hover {
+        transform: translateY(-2px);
+    }
+    .modern-card .card-header {
+        border: none;
+        padding: 1.25rem;
+        font-weight: 600;
+        color: #121212;
+    }
+    .config-card .card-header {
+        background: #1abc9c;
+    }
+    .warning-card .card-header {
+        background: #f39c12;
+        color: #121212;
+    }
+    .logs-card .card-header {
+        background: #27ae60;
+        color: #121212;
+    }
+
+    /* ==== INPUTS & BUTTONS ==== */
+    .form-control-modern {
+        background: #2a2a2a;
+        color: #e0e0e0;
+        border: 1px solid #444;
+        border-radius: 10px;
+        padding: 0.75rem 1rem;
+    }
+    .form-control-modern:focus {
+        border-color: #00e6e6;
+        box-shadow: 0 0 10px rgba(0,230,230,0.5);
+    }
+    .btn-modern {
+        border-radius: 25px;
+        padding: 0.75rem 1.5rem;
+        font-weight: 600;
+        border: none;
+        transition: all 0.3s ease;
+    }
+    .btn-primary-modern {
+        background: #00e6e6;
+        color: #121212;
+    }
+    .btn-primary-modern:hover {
+        background: #00cccc;
+        box-shadow: 0 0 15px rgba(0,230,230,0.6);
+        transform: translateY(-2px);
+    }
+
+    /* ==== LOG LINKS ==== */
+    .log-links a {
+        background: #181818;
+        color: #00e6e6;
+        border-left: 4px solid #00e6e6;
+    }
+    .log-links a:hover {
+        background: #222;
+        color: #00ffff;
+        transform: translateX(5px);
+    }
+
+    /* ==== LOG TERMINAL ==== */
+    .log-terminal {
+        background: #000000 !important;
+        color: #00ff99 !important;
+        font-family: 'Courier New', monospace;
+        font-size: 0.85rem;
+        line-height: 1.4;
+        border-radius: 10px;
+        padding: 1.5rem;
+        max-height: 500px;
+        overflow-y: auto;
+        border: 2px solid #00ff99;
+        position: relative;
+    }
+    .log-terminal::before {
+        content: "● ● ●";
+        position: absolute;
+        top: 10px;
+        left: 15px;
+        color: #ff5f56;
+        font-size: 12px;
+    }
+    .log-terminal .log-line {
+        border-bottom: 1px solid rgba(0,255,153,0.1);
+        margin-bottom: 0.25rem;
+        padding: 0.25rem 0;
+    }
+    .log-terminal .log-line:hover {
+        background: rgba(0,255,153,0.05);
+    }
+
+    /* ==== STATS ==== */
+    .log-stats {
+        background: #181818;
+        border-radius: 10px;
+        padding: 1rem;
+        text-align: center;
+        border: 1px solid rgba(255,255,255,0.05);
+    }
+    .stat-number {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #00e6e6;
+    }
+    .stat-label {
+        font-size: 0.8rem;
+        color: #999;
+    }
+
+    /* ==== SECURITY BADGE ==== */
+    .security-badge {
+        background: #e74c3c;
+        color: white;
+        padding: 0.25rem 0.75rem;
+        border-radius: 15px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+
+    /* ==== ALERT BOX ==== */
+    .alert-modern {
+        border: none;
+        border-radius: 15px;
+        padding: 1.5rem;
+        border-left: 5px solid #f39c12;
+        background: linear-gradient(135deg, #1f1f1f, #272727);
+        color: #f1c40f;
+    }
+</style>
+
+<div class="page-header">
+    <div class="container">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb breadcrumb-modern">
+                <li class="breadcrumb-item"><a href="{{ url_for('dashboard') }}">Dashboard</a></li>
+                <li class="breadcrumb-item active">System Logs</li>
+            </ol>
+        </nav>
+        
+        <h1 class="mb-0">
+            <span class="icon-wrapper">
+                <i class="fas fa-file-alt"></i>
+            </span>
+            System Logs
+        </h1>
+        <p class="mb-0 opacity-75">Monitor and analyze system activity</p>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-4 mb-4">
+        <div class="card modern-card config-card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-cog me-2"></i>
+                    Log Configuration
+                </h5>
+            </div>
+            <div class="card-body">
+                <form method="GET">
+                    <div class="mb-3">
+                        <label for="file" class="form-label fw-bold">Log File Path</label>
+                        <input type="text" class="form-control form-control-modern" id="file" name="file" 
+                               value="{{ request.args.get('file', '/var/log/apache2/access.log') }}">
+                        <div class="mt-2">
+                            <span class="security-badge">
+                                <i class="fas fa-exclamation-triangle me-1"></i>
+                                Vulnerable
+                            </span>
+                            <small class="text-muted ms-2">Command injection possible</small>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary-modern btn-modern w-100">
+                        <i class="fas fa-search me-2"></i> Load Logs
+                    </button>
+                </form>
+                
+                <hr class="my-4">
+                
+                <h6 class="fw-bold mb-3">
+                    <i class="fas fa-list me-2 text-primary"></i>
+                    Common Log Files
+                </h6>
+                <ul class="log-links">
+                    <li><a href="?file=/var/log/apache2/access.log">
+                        <i class="fas fa-server me-2"></i>Apache Access Log
+                    </a></li>
+                    <li><a href="?file=/var/log/apache2/error.log">
+                        <i class="fas fa-exclamation-circle me-2"></i>Apache Error Log
+                    </a></li>
+                    <li><a href="?file=/var/log/nginx/access.log">
+                        <i class="fas fa-globe me-2"></i>Nginx Access Log
+                    </a></li>
+                    <li><a href="?file=/var/log/syslog">
+                        <i class="fas fa-cogs me-2"></i>System Log
+                    </a></li>
+                </ul>
+            </div>
+        </div>
+        
+        <div class="card modern-card warning-card mt-3">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-shield-alt me-2"></i>
+                    Security Notice
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="text-center">
+                    <i class="fas fa-bug fa-2x text-warning mb-2"></i>
+                    <p class="small mb-0">
+                        This log viewing functionality is intentionally vulnerable to command injection attacks for educational purposes.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-8 mb-4">
+        <div class="card modern-card logs-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <i class="fas fa-terminal me-2"></i>
+                    Log Contents
+                </h5>
+                <div class="d-flex align-items-center">
+                    <span class="security-badge me-2">Live</span>
+                    <small class="text-light">Last 100 lines</small>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="log-stats">
+                    <div class="stat-item">
+                        <span class="stat-number">{{ logs|length }}</span>
+                        <span class="stat-label">Log Entries</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-number">100</span>
+                        <span class="stat-label">Max Lines</span>
+                    </div>
+                </div>
+                
+                <div class="log-terminal">
+                    {% if logs %}
+                        {% for log in logs %}
+                            <div class="log-line">{{ log }}</div>
+                        {% endfor %}
+                    {% else %}
+                        <div class="text-center py-4">
+                            <i class="fas fa-file-alt fa-2x mb-3" style="color: #666;"></i>
+                            <div style="color: #666;">No log entries found</div>
+                            <div style="color: #444; font-size: 0.8rem;">Try selecting a different log file</div>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="alert alert-modern alert-warning-modern">
+            <h5 class="mb-3">
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                Security Warning
+            </h5>
+            <div class="row">
+                <div class="col-md-8">
+                    <p class="mb-0">
+                        This log viewing functionality is intentionally vulnerable to command injection attacks. 
+                        In a real application, this would be a critical security flaw that could allow attackers 
+                        to execute arbitrary commands on the server.
+                    </p>
+                </div>
+                <div class="col-md-4 text-end">
+                    <div class="security-badge" style="font-size: 1rem; padding: 0.5rem 1rem;">
+                        <i class="fas fa-bug me-2"></i>
+                        Educational Purpose
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

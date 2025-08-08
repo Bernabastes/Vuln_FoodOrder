@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Restaurants - VulnEats{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h2><i class="fas fa-utensils"></i> Our Restaurants</h2>
+        <p class="text-muted">Discover amazing restaurants and their delicious menus</p>
+    </div>
+</div>
+
+<div class="row">
+    {% for restaurant in restaurants %}
+    <div class="col-md-6 col-lg-4 mb-4">
+        <div class="card menu-item h-100">
+            {% if restaurant.logo_path %}
+            <img src="{{ url_for('uploaded_file', filename=restaurant.logo_path) }}" class="card-img-top" alt="{{ restaurant.name }}" style="height: 200px; object-fit: cover;">
+            {% else %}
+            <div class="card-img-top bg-light d-flex align-items-center justify-content-center" style="height: 200px;">
+                <i class="fas fa-utensils fa-3x text-muted"></i>
+            </div>
+            {% endif %}
+            <div class="card-body">
+                <h5 class="card-title">{{ restaurant.name }}</h5>
+                <p class="card-text">
+                    <i class="fas fa-map-marker-alt"></i> {{ restaurant.address }}
+                </p>
+                <a href="{{ url_for('restaurant_menu', restaurant_id=restaurant.id) }}" class="btn btn-primary">
+                    <i class="fas fa-eye"></i> View Menu
+                </a>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

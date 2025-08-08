@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}VulnEats - Home{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8">
+        <div class="jumbotron bg-light p-5 rounded">
+            <h1 class="display-4">Welcome to VulnEats</h1>
+            <p class="lead">Order delicious food from your favorite restaurants with just a few clicks!</p>
+            <hr class="my-4">
+            <p>Discover amazing dishes, place orders, and track your delivery in real-time.</p>
+            <a class="btn btn-primary btn-lg" href="{{ url_for('restaurants') }}" role="button">
+                <i class="fas fa-utensils"></i> Browse Restaurants
+            </a>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-search"></i> Search Menu Items</h5>
+            </div>
+            <div class="card-body">
+                <form action="{{ url_for('search') }}" method="GET">
+                    <div class="input-group">
+                        <input type="text" class="form-control" name="q" placeholder="Search for dishes..." required>
+                        <button class="btn btn-outline-primary" type="submit">
+                            <i class="fas fa-search"></i>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        
+        {% if session.user_id %}
+        <div class="card mt-3">
+            <div class="card-header">
+                <h5><i class="fas fa-user"></i> Quick Actions</h5>
+            </div>
+            <div class="card-body">
+                <a href="{{ url_for('dashboard') }}" class="btn btn-outline-primary btn-sm w-100 mb-2">
+                    <i class="fas fa-tachometer-alt"></i> View Dashboard
+                </a>
+                <a href="{{ url_for('view_cart') }}" class="btn btn-outline-success btn-sm w-100">
+                    <i class="fas fa-shopping-cart"></i> View Cart
+                </a>
+            </div>
+        </div>
+        {% else %}
+        <div class="card mt-3">
+            <div class="card-header">
+                <h5><i class="fas fa-sign-in-alt"></i> Get Started</h5>
+            </div>
+            <div class="card-body">
+                <a href="{{ url_for('login') }}" class="btn btn-primary btn-sm w-100 mb-2">
+                    <i class="fas fa-sign-in-alt"></i> Login
+                </a>
+                <a href="{{ url_for('register') }}" class="btn btn-outline-primary btn-sm w-100">
+                    <i class="fas fa-user-plus"></i> Register
+                </a>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="row mt-5">
+    <div class="col-12">
+        <h2><i class="fas fa-star"></i> Featured Restaurants</h2>
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card menu-item">
+                    <div class="card-body">
+                        <h5 class="card-title">
+                            <i class="fas fa-pizza-slice"></i> Pizza Palace
+                        </h5>
+                        <p class="card-text">Delicious pizzas with fresh ingredients and authentic recipes.</p>
+                        <a href="{{ url_for('restaurant_menu', restaurant_id=1) }}" class="btn btn-primary">
+                            View Menu
+                        </a>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card menu-item">
+                    <div class="card-body">
+                        <h5 class="card-title">
+                            <i class="fas fa-hamburger"></i> Burger House
+                        </h5>
+                        <p class="card-text">Juicy burgers and crispy fries made with premium beef.</p>
+                        <a href="{{ url_for('restaurant_menu', restaurant_id=2) }}" class="btn btn-primary">
+                            View Menu
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-5">
+    <div class="col-12">
+        <div class="alert alert-info">
+            <h5><i class="fas fa-info-circle"></i> About VulnEats</h5>
+            <p>This is a cybersecurity lab project designed to demonstrate common web application vulnerabilities. 
+            The application intentionally contains security flaws for educational purposes.</p>
+            <small class="text-muted">⚠️ This application is for educational use only. Do not use in production.</small>
+        </div>
+    </div>
+</div>
+{% endblock %}
