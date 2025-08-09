@@ -1,5 +1,9 @@
 async function fetchCart() {
-  const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
+  // Use INTERNAL_API_BASE for server-side, NEXT_PUBLIC_API_BASE for client-side
+  let base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
+  if (typeof window === 'undefined' && process.env.INTERNAL_API_BASE) {
+    base = process.env.INTERNAL_API_BASE
+  }
   const res = await fetch(`${base}/api/cart`, { cache: 'no-store', credentials: 'include' as any })
   if (!res.ok) return { items: [], total: 0 }
   return res.json()
