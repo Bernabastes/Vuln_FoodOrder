@@ -9,12 +9,15 @@ services:
       - "5001:5001"
     volumes:
       - ./uploads:/app/uploads
-      - ./vulneats.db:/app/vulneats.db
     environment:
-      - FLASK_ENV=development
-      - FLASK_DEBUG=1
-      - DATABASE_PATH=/app/vulneats.db
-      - UPLOAD_FOLDER=/app/uploads
+      FLASK_ENV: development
+      FLASK_DEBUG: "1"
+      DATABASE_PATH: /app/vulneats.db
+      UPLOAD_FOLDER: /app/uploads
+      DATABASE_URL: "postgresql://neondb_owner:npg_75xImXtNePLH@ep-holy-haze-a1c2ms4i-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+      CLOUDINARY_CLOUD_NAME: dpkakpm7v
+      CLOUDINARY_API_KEY: "623281826869567"
+      CLOUDINARY_API_SECRET: "U_VxEoVJQ97t40qVMNkia86H8ks"
     restart: unless-stopped
     command: python backend/app.py
 

@@ -148,10 +148,14 @@ export default function RestaurantPage({
             >
               {m.image_path ? (
                 <img
-                  src={`${
-                    process.env.NEXT_PUBLIC_API_BASE ||
-                    'http://localhost:5001'
-                  }/api/uploads/${m.image_path}`}
+                  src={
+                    m.image_path.startsWith('http')
+                      ? m.image_path
+                      : `${
+                          process.env.NEXT_PUBLIC_API_BASE ||
+                          'http://localhost:5001'
+                        }/api/uploads/${m.image_path}`
+                  }
                   alt={m.name}
                   className="h-56 w-full object-cover"
                 />
