@@ -23,7 +23,7 @@ export default async function SearchPage({ searchParams }: { searchParams: { q?:
           <Link key={m.id} href={`/restaurant/${m.restaurant_id}`} className="rounded-lg border p-5 bg-white shadow-sm block hover:shadow">
             <div className="font-semibold text-lg">{m.name}</div>
             <div className="text-sm text-gray-700 line-clamp-2">{m.description}</div>
-            <div className="mt-2 font-medium">${'{'}m.price{'}'}</div>
+            <div className="mt-2 font-medium">{`$${m.price}`}</div>
           </Link>
         ))}
       </div>
