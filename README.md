@@ -75,7 +75,7 @@ VulnEats is a web application that simulates an online food ordering system with
 5. **Access the application**
    - Open your browser and go to `http://localhost:5000`
 
-### Option 2: Docker Deployment
+### Option 2: Docker Deployment (split services)
 
 1. **Build and run with Docker Compose**
    ```bash
@@ -83,7 +83,8 @@ VulnEats is a web application that simulates an online food ordering system with
    ```
 
 2. **Access the application**
-   - Open your browser and go to `http://localhost:5000`
+    - Frontend: `http://localhost:3000`
+    - Backend API: `http://localhost:5001`
 
 ## 🔑 Default Credentials
 
@@ -95,10 +96,10 @@ VulnEats is a web application that simulates an online food ordering system with
 
 ## 🛠 Technology Stack
 
-- **Backend**: Python Flask
+- **Backend**: Python Flask (API in `backend/`) + CORS
 - **Database**: SQLite
-- **Frontend**: HTML, CSS, JavaScript, Bootstrap 5
-- **Deployment**: Docker + Docker Compose
+- **Frontend**: Next.js 14 + React 18 + Tailwind CSS (in `frontend/`)
+- **Deployment**: Docker + Docker Compose (services: `backend`, `frontend`)
 
 ## 🧪 Testing Tools
 
