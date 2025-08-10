@@ -22,7 +22,8 @@ export default function LoginPage() {
       setError('Invalid credentials')
       return
     }
-    router.push('/dashboard')
+    // Hard refresh so server components/layout re-fetch with new auth cookie
+    window.location.href = '/dashboard'
   }
 
   return (

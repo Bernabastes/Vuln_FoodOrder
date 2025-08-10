@@ -11,6 +11,8 @@ type DashboardData = {
 
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isUnauthorized, setIsUnauthorized] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [createMessage, setCreateMessage] = useState<{type: 'success' | 'error', text: string} | null>(null)
   const [deletingRestaurant, setDeletingRestaurant] = useState<number | null>(null)
@@ -19,16 +21,35 @@ export default function DashboardPage() {
   useEffect(() => {
     const load = async () => {
       const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
-      const res = await fetch(`${base}/api/dashboard`, { credentials: 'include' })
-      if (res.ok) {
-        const dashboardData = await res.json()
-        setData(dashboardData)
+      try {
+        const res = await fetch(`${base}/api/dashboard`, { credentials: 'include' })
+        if (res.status === 401) {
+          setIsUnauthorized(true)
+          return
+        }
+        if (res.ok) {
+          const dashboardData = await res.json()
+          setData(dashboardData)
+        }
+      } finally {
+        setIsLoading(false)
       }
     }
     load()
   }, [])
 
-  if (!data) {
+  if (isLoading) {
+    return (
+      <main className="max-w-4xl mx-auto p-6">
+        <div className="bg-white border rounded-lg shadow p-6 animate-pulse">
+          <div className="h-6 bg-gray-200 rounded w-40 mb-4" />
+          <div className="h-4 bg-gray-200 rounded w-24" />
+        </div>
+      </main>
+    )
+  }
+
+  if (isUnauthorized || !data) {
     return (
       <main className="max-w-4xl mx-auto p-6">
         <div className="bg-white border rounded-lg shadow p-6">
@@ -199,109 +220,18 @@ export default function DashboardPage() {
             </div>
             <div className="bg-white rounded-2xl shadow p-6">
               <h5 className="font-semibold mb-3">Quick Actions</h5>
-              <div className="p-4 space-y-2">
+               <div className="p-4 space-y-2">
                 <a href="/admin/users" className="block w-full text-center bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
                   👥 Manage Users
                 </a>
-                <a href="/admin/restaurants" className="block w-full text-center bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500">
-                  🏪 Manage Restaurants
+                <a href="/admin/restaurants/create" className="block w-full text-center bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500">
+                  🏪 Create Restaurant
                 </a>
               </div>
             </div>
           </div>
 
-          {/* Add New Restaurant Form */}
-          <div className="bg-white rounded-2xl shadow p-6">
-            <h5 className="font-semibold mb-4">Add New Restaurant</h5>
-            
-            {createMessage && (
-              <div className={`mb-4 p-3 rounded-md ${
-                createMessage.type === 'success' 
-                  ? 'bg-green-100 text-green-800 border border-green-200' 
-                  : 'bg-red-100 text-red-800 border border-red-200'
-              }`}>
-                {createMessage.text}
-              </div>
-            )}
-            
-            <form ref={formRef} onSubmit={async (e) => {
-              e.preventDefault()
-              setIsCreating(true)
-              setCreateMessage(null)
-
-              const formData = new FormData(e.currentTarget)
-
-              try {
-                const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
-                const response = await fetch(`${base}/api/admin/restaurant/create`, {
-                  method: 'POST',
-                  credentials: 'include',
-                  body: formData
-                })
-
-                if (response.ok) {
-                  const result = await response.json()
-                  setCreateMessage({ type: 'success', text: result.message || 'Restaurant created successfully!' })
-                  if (formRef.current) {
-                    formRef.current.reset()
-                  }
-                  location.reload()
-                } else {
-                  const error = await response.text()
-                  setCreateMessage({ type: 'error', text: `Error creating restaurant: ${error}` })
-                }
-              } catch (error) {
-                setCreateMessage({ type: 'error', text: `Network error: ${error}` })
-              } finally {
-                setIsCreating(false)
-              }
-            }} className="grid md:grid-cols-2 gap-4">
-              <div className="md:col-span-2">
-                <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">Restaurant Name *</label>
-                <input type="text" id="name" name="name" required className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              </div>
-              
-              <div className="md:col-span-2">
-                <label htmlFor="address" className="block text-sm font-medium text-gray-700 mb-1">Address *</label>
-                <input type="text" id="address" name="address" required className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              </div>
-              
-              <div>
-                <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">Owner Username *</label>
-                <input type="text" id="username" name="username" required className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              </div>
-              
-              <div>
-                <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">Owner Email *</label>
-                <input type="email" id="email" name="email" required className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              </div>
-              
-              <div className="md:col-span-2">
-                <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">Owner Password *</label>
-                <input type="password" id="password" name="password" required className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                <p className="text-xs text-gray-500 mt-1">A new owner account will be created with these credentials</p>
-              </div>
-              <div>
-                <label htmlFor="logo" className="block text-sm font-medium text-gray-700 mb-1">Poster Image (file) *</label>
-                <input type="file" id="logo" name="logo" accept="image/*" required className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                <p className="text-xs text-gray-500 mt-1">Required. Upload an image to show on the restaurant card.</p>
-              </div>
-              <div className="flex items-end">
-                <button 
-                  type="submit" 
-                  className="w-full bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500"
-                  disabled={isCreating}
-                >
-                  {isCreating ? 'Creating...' : 'Create Restaurant'}
-                </button>
-              </div>
-            </form>
-            
-            <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
-              <h6 className="font-semibold text-yellow-900 mb-1">Security Notice</h6>
-              <p className="text-sm text-yellow-800">The restaurant creation and deletion functionality is intentionally vulnerable to CSRF attacks for educational purposes.</p>
-            </div>
-          </div>
+          {/* Restaurant creation moved to its own page at /admin/restaurants/create */}
 
           <div className="grid lg:grid-cols-2 gap-6">
             <div className="bg-white rounded-2xl shadow">

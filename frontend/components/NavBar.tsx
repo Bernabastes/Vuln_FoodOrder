@@ -4,14 +4,14 @@ import { useEffect, useState } from 'react'
 
 type Me = { user: { id: number; username: string; role: string } | null }
 
-export default function NavBar() {
-  const [me, setMe] = useState<Me>({ user: null })
+export default function NavBar({ initialMe }: { initialMe?: Me }) {
+  const [me, setMe] = useState<Me>(initialMe ?? { user: null })
 
   useEffect(() => {
     ;(async () => {
       try {
         const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
-        const res = await fetch(`${base}/api/me`, { credentials: 'include' })
+        const res = await fetch(`${base}/api/me`, { credentials: 'include', cache: 'no-store' })
         if (res.ok) setMe(await res.json())
       } catch {}
     })()
