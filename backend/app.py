@@ -396,15 +396,12 @@ def create_app() -> Flask:
                             resource_type='image',
                         )
                         image_path = upload_result.get('secure_url') or upload_result.get('url')
-                        print('Cloudinary upload result:', upload_result)
-                    except Exception as e:
-                        print('Cloudinary upload failed:', e)
+                    except Exception:
                         image_path = None
                 if not image_path:
                     filename = secure_filename(file.filename)
                     file.save(os.path.join(ApiConfig.UPLOAD_FOLDER, filename))
                     image_path = filename
-                    print('Saved image locally as:', image_path)
 
         
         conn = get_db_connection()
@@ -413,8 +410,6 @@ def create_app() -> Flask:
         if not restaurant:
             conn.close()
             return jsonify({'error': 'no_restaurant'}), 400
-        
-        print('Inserting menu item with image_path:', image_path)
         conn.execute('''
             INSERT INTO menu_items (restaurant_id, name, description, price, image_path)
             VALUES (?, ?, ?, ?, ?)
@@ -462,19 +457,58 @@ def create_app() -> Flask:
     @app.post('/api/admin/restaurant/create')
     @admin_required_json
     def api_admin_create_restaurant():
-        data = request.get_json() or {}
-        name = data.get('name', '').strip()
-        address = data.get('address', '').strip()
-        username = data.get('username', '').strip()
-        email = data.get('email', '').strip()
-        password = data.get('password', '').strip()
-        
+        """Create a restaurant and owner user via multipart/form-data with required image file 'logo'."""
+        name = (request.form.get('name') or '').strip()
+        address = (request.form.get('address') or '').strip()
+        username = (request.form.get('username') or '').strip()
+        email = (request.form.get('email') or '').strip()
+        password = (request.form.get('password') or '').strip()
+
         if not name or not address:
             return jsonify({'error': 'Name and address are required'}), 400
-        
+
         if not username or not email or not password:
             return jsonify({'error': 'Username, email, and password are required'}), 400
-        
+
+        # Require image file
+        if 'logo' not in request.files:
+            return jsonify({'error': 'Poster image file (logo) is required'}), 400
+        file = request.files['logo']
+        if not file or not file.filename:
+            return jsonify({'error': 'Poster image file (logo) is required'}), 400
+
+        # Upload/store image
+        logo_path = None
+        use_cloud = (
+            cloudinary is not None and (
+                os.environ.get('CLOUDINARY_URL') or (
+                    os.environ.get('CLOUDINARY_CLOUD_NAME') and
+                    os.environ.get('CLOUDINARY_API_KEY') and
+                    os.environ.get('CLOUDINARY_API_SECRET')
+                )
+            )
+        )
+        if use_cloud:
+            try:
+                upload_result = cloudinary.uploader.upload(
+                    file,
+                    folder='vulneats/restaurants',
+                    resource_type='image',
+                )
+                logo_path = upload_result.get('secure_url') or upload_result.get('url')
+            except Exception:
+                logo_path = None
+        if not logo_path:
+            filename = secure_filename(file.filename)
+            file.save(os.path.join(ApiConfig.UPLOAD_FOLDER, filename))
+            logo_path = filename
+
+        if not name or not address:
+            return jsonify({'error': 'Name and address are required'}), 400
+
+        if not username or not email or not password:
+            return jsonify({'error': 'Username, email, and password are required'}), 400
+
         conn = get_db_connection()
         try:
             # Check if username or email already exists
@@ -482,7 +516,7 @@ def create_app() -> Flask:
             if existing_user:
                 conn.close()
                 return jsonify({'error': 'Username or email already exists'}), 400
-            
+
             # Create new owner user
             hashed_password = hashlib.md5(password.encode()).hexdigest()
             owner_id = insert_and_get_id(
@@ -501,18 +535,18 @@ def create_app() -> Flask:
                 INSERT INTO restaurants (owner_id, name, address, logo_path, created_at)
                 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ''',
-                (owner_id, name, address, None)
+                (owner_id, name, address, logo_path)
             )
             conn.commit()
             conn.close()
-            
+
             return jsonify({
-                'ok': True, 
+                'ok': True,
                 'restaurant_id': restaurant_id,
                 'owner_id': owner_id,
                 'message': f'Restaurant "{name}" created successfully with owner "{username}"'
             })
-            
+
         except Exception as e:
             conn.close()
             return jsonify({'error': f'Database error: {str(e)}'}), 500
