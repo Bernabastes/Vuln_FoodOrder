@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 
 type DashboardData = {
   role: 'customer' | 'owner' | 'admin'
@@ -11,12 +11,19 @@ type DashboardData = {
 
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null)
+  const [isCreating, setIsCreating] = useState(false)
+  const [createMessage, setCreateMessage] = useState<{type: 'success' | 'error', text: string} | null>(null)
+  const [deletingRestaurant, setDeletingRestaurant] = useState<number | null>(null)
+  const formRef = useRef<HTMLFormElement>(null)
 
   useEffect(() => {
     const load = async () => {
       const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
       const res = await fetch(`${base}/api/dashboard`, { credentials: 'include' })
-      if (res.ok) setData(await res.json())
+      if (res.ok) {
+        const dashboardData = await res.json()
+        setData(dashboardData)
+      }
     }
     load()
   }, [])
@@ -192,10 +199,111 @@ export default function DashboardPage() {
             </div>
             <div className="bg-white rounded-2xl shadow p-6">
               <h5 className="font-semibold mb-3">Quick Actions</h5>
-              <div className="space-y-2">
-                <a href="/admin/users" className="block text-center bg-red-600 text-white px-4 py-2 rounded">Manage Users</a>
-                <a href="/admin/logs" className="block text-center border border-red-600 text-black px-4 py-2 rounded">View System Logs</a>
+              <div className="p-4 space-y-2">
+                <a href="/admin/users" className="block w-full text-center bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  👥 Manage Users
+                </a>
+                <a href="/admin/restaurants" className="block w-full text-center bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500">
+                  🏪 Manage Restaurants
+                </a>
               </div>
+            </div>
+          </div>
+
+          {/* Add New Restaurant Form */}
+          <div className="bg-white rounded-2xl shadow p-6">
+            <h5 className="font-semibold mb-4">Add New Restaurant</h5>
+            
+            {createMessage && (
+              <div className={`mb-4 p-3 rounded-md ${
+                createMessage.type === 'success' 
+                  ? 'bg-green-100 text-green-800 border border-green-200' 
+                  : 'bg-red-100 text-red-800 border border-red-200'
+              }`}>
+                {createMessage.text}
+              </div>
+            )}
+            
+            <form ref={formRef} onSubmit={async (e) => {
+              e.preventDefault()
+              setIsCreating(true)
+              setCreateMessage(null)
+              
+              const formData = new FormData(e.currentTarget)
+              const restaurantData = {
+                name: formData.get('name') as string,
+                address: formData.get('address') as string,
+                username: formData.get('username') as string,
+                email: formData.get('email') as string,
+                password: formData.get('password') as string
+              }
+              
+              try {
+                const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
+                const response = await fetch(`${base}/api/admin/restaurant/create`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  credentials: 'include',
+                  body: JSON.stringify(restaurantData)
+                })
+                
+                if (response.ok) {
+                  const result = await response.json()
+                  setCreateMessage({ type: 'success', text: result.message || 'Restaurant created successfully!' })
+                  // Reset form using the ref
+                  if (formRef.current) {
+                    formRef.current.reset()
+                  }
+                  location.reload()
+                } else {
+                  const error = await response.text()
+                  setCreateMessage({ type: 'error', text: `Error creating restaurant: ${error}` })
+                }
+              } catch (error) {
+                setCreateMessage({ type: 'error', text: `Network error: ${error}` })
+              } finally {
+                setIsCreating(false)
+              }
+            }} className="grid md:grid-cols-2 gap-4">
+              <div className="md:col-span-2">
+                <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">Restaurant Name *</label>
+                <input type="text" id="name" name="name" required className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              
+              <div className="md:col-span-2">
+                <label htmlFor="address" className="block text-sm font-medium text-gray-700 mb-1">Address *</label>
+                <input type="text" id="address" name="address" required className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              
+              <div>
+                <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">Owner Username *</label>
+                <input type="text" id="username" name="username" required className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              
+              <div>
+                <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">Owner Email *</label>
+                <input type="email" id="email" name="email" required className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              
+              <div className="md:col-span-2">
+                <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">Owner Password *</label>
+                <input type="password" id="password" name="password" required className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <p className="text-xs text-gray-500 mt-1">A new owner account will be created with these credentials</p>
+              </div>
+              <div className="flex items-end">
+                <button 
+                  type="submit" 
+                  className="w-full bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500"
+                  disabled={isCreating}
+                >
+                  {isCreating ? 'Creating...' : 'Create Restaurant'}
+                </button>
+              </div>
+            </form>
+            
+            <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+              <h6 className="font-semibold text-yellow-900 mb-1">Security Notice</h6>
+              <p className="text-sm text-yellow-800">The restaurant creation and deletion functionality is intentionally vulnerable to CSRF attacks for educational purposes.</p>
             </div>
           </div>
 
@@ -206,9 +314,50 @@ export default function DashboardPage() {
                 {data.restaurants && data.restaurants.length > 0 ? (
                   data.restaurants.map((r: any) => (
                     <div key={r.id} className="bg-gray-50 rounded p-3">
-                      <h6 className="font-semibold">{r.name}</h6>
-                      <div className="text-sm text-gray-600">📍 {r.address}</div>
-                      {r.created_at && <div className="text-sm text-gray-600">📅 {r.created_at}</div>}
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <h6 className="font-semibold">{r.name}</h6>
+                          <div className="text-sm text-gray-600">📍 {r.address}</div>
+                          {r.created_at && <div className="text-sm text-gray-600">📅 {r.created_at}</div>}
+                        </div>
+                        <button 
+                          onClick={async () => {
+                            if (confirm(`Are you sure you want to delete "${r.name}"? This action cannot be undone.`)) {
+                              setDeletingRestaurant(r.id)
+                              try {
+                                const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
+                                const response = await fetch(`${base}/api/admin/restaurant/${r.id}/delete`, {
+                                  method: 'POST',
+                                  credentials: 'include'
+                                })
+                                
+                                if (response.ok) {
+                                  const result = await response.json()
+                                  setCreateMessage({ type: 'success', text: result.message })
+                                  // Refresh dashboard data after a short delay
+                                  setTimeout(() => location.reload(), 1500)
+                                } else {
+                                  const error = await response.text()
+                                  setCreateMessage({ type: 'error', text: `Error deleting restaurant: ${error}` })
+                                }
+                              } catch (error) {
+                                setCreateMessage({ type: 'error', text: `Network error: ${error}` })
+                              } finally {
+                                setDeletingRestaurant(null)
+                              }
+                            }
+                          }}
+                          disabled={deletingRestaurant === r.id}
+                          className={`ml-3 px-3 py-1 text-sm rounded focus:outline-none focus:ring-2 ${
+                            deletingRestaurant === r.id
+                              ? 'bg-gray-400 text-gray-600 cursor-not-allowed'
+                              : 'bg-red-600 text-white hover:bg-red-700 focus:ring-red-500'
+                          }`}
+                          title="Delete restaurant"
+                        >
+                          {deletingRestaurant === r.id ? '⏳ Deleting...' : '🗑️ Delete'}
+                        </button>
+                      </div>
                     </div>
                   ))
                 ) : (

@@ -307,11 +307,15 @@ def create_app() -> Flask:
                 filename = secure_filename(file.filename)
                 file.save(os.path.join(ApiConfig.UPLOAD_FOLDER, filename))
                 image_path = filename
+
+        
         conn = get_db_connection()
         restaurant = conn.execute('SELECT * FROM restaurants WHERE owner_id = ?', (session['user_id'],)).fetchone()
+        
         if not restaurant:
             conn.close()
             return jsonify({'error': 'no_restaurant'}), 400
+        
         conn.execute('''
             INSERT INTO menu_items (restaurant_id, name, description, price, image_path)
             VALUES (?, ?, ?, ?, ?)
@@ -355,6 +359,145 @@ def create_app() -> Flask:
         except Exception:
             logs = ['Error reading log file']
         return jsonify({'lines': logs})
+
+    @app.post('/api/admin/restaurant/create')
+    @admin_required_json
+    def api_admin_create_restaurant():
+        data = request.get_json() or {}
+        name = data.get('name', '').strip()
+        address = data.get('address', '').strip()
+        username = data.get('username', '').strip()
+        email = data.get('email', '').strip()
+        password = data.get('password', '').strip()
+        
+        if not name or not address:
+            return jsonify({'error': 'Name and address are required'}), 400
+        
+        if not username or not email or not password:
+            return jsonify({'error': 'Username, email, and password are required'}), 400
+        
+        conn = get_db_connection()
+        try:
+            # Check if username or email already exists
+            existing_user = conn.execute('SELECT id FROM users WHERE username = ? OR email = ?', (username, email)).fetchone()
+            if existing_user:
+                conn.close()
+                return jsonify({'error': 'Username or email already exists'}), 400
+            
+            # Create new owner user
+            hashed_password = hashlib.md5(password.encode()).hexdigest()
+            cursor = conn.execute('''
+                INSERT INTO users (username, email, password_hash, role, created_at)
+                VALUES (?, ?, ?, 'owner', CURRENT_TIMESTAMP)
+            ''', (username, email, hashed_password))
+            
+            owner_id = cursor.lastrowid
+            
+            # Create the restaurant
+            cursor = conn.execute('''
+                INSERT INTO restaurants (owner_id, name, address, logo_path, created_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (owner_id, name, address, None))
+            
+            restaurant_id = cursor.lastrowid
+            conn.commit()
+            conn.close()
+            
+            return jsonify({
+                'ok': True, 
+                'restaurant_id': restaurant_id,
+                'owner_id': owner_id,
+                'message': f'Restaurant "{name}" created successfully with owner "{username}"'
+            })
+            
+        except Exception as e:
+            conn.close()
+            return jsonify({'error': f'Database error: {str(e)}'}), 500
+
+
+    @app.post('/api/admin/restaurant/<int:restaurant_id>/delete')
+    @admin_required_json
+    def api_admin_delete_restaurant(restaurant_id: int):
+        conn = get_db_connection()
+        try:
+            # Check if restaurant exists
+            restaurant = conn.execute('SELECT * FROM restaurants WHERE id = ?', (restaurant_id,)).fetchone()
+            if not restaurant:
+                conn.close()
+                return jsonify({'error': 'Restaurant not found'}), 404
+            
+            # Check if restaurant has any orders
+            orders = conn.execute('SELECT COUNT(*) as count FROM orders WHERE restaurant_id = ?', (restaurant_id,)).fetchone()
+            if orders['count'] > 0:
+                conn.close()
+                return jsonify({'error': 'Cannot delete restaurant with existing orders'}), 400
+            
+            # Check if restaurant has any menu items
+            menu_items = conn.execute('SELECT COUNT(*) as count FROM menu_items WHERE restaurant_id = ?', (restaurant_id,)).fetchone()
+            if menu_items['count'] > 0:
+                conn.close()
+                return jsonify({'error': 'Cannot delete restaurant with existing menu items'}), 400
+            
+            # Delete the restaurant
+            conn.execute('DELETE FROM restaurants WHERE id = ?', (restaurant_id,))
+            conn.commit()
+            conn.close()
+            
+            return jsonify({
+                'ok': True,
+                'message': f'Restaurant "{restaurant["name"]}" deleted successfully'
+            })
+            
+        except Exception as e:
+            conn.close()
+            return jsonify({'error': f'Database error: {str(e)}'}), 500
+
+    @app.post('/api/admin/user/<int:user_id>/delete')
+    @admin_required_json
+    def api_admin_delete_user(user_id: int):
+        conn = get_db_connection()
+        try:
+            # Check if user exists
+            user = conn.execute('SELECT * FROM users WHERE id = ?', (user_id,)).fetchone()
+            if not user:
+                conn.close()
+                return jsonify({'error': 'User not found'}), 404
+            
+            # Prevent admin from deleting themselves
+            if user_id == session['user_id']:
+                conn.close()
+                return jsonify({'error': 'Cannot delete your own account'}), 400
+            
+            # Prevent deletion of admin users
+            if user['role'] == 'admin':
+                conn.close()
+                return jsonify({'error': 'Cannot delete admin users'}), 400
+            
+            # Check if user has any restaurants
+            restaurants = conn.execute('SELECT COUNT(*) as count FROM restaurants WHERE owner_id = ?', (user_id,)).fetchone()
+            if restaurants['count'] > 0:
+                conn.close()
+                return jsonify({'error': 'Cannot delete user with existing restaurants'}), 400
+            
+            # Check if user has any orders
+            orders = conn.execute('SELECT COUNT(*) as count FROM orders WHERE user_id = ?', (user_id,)).fetchone()
+            if orders['count'] > 0:
+                conn.close()
+                return jsonify({'error': 'Cannot delete user with existing orders'}), 400
+            
+            # Delete the user
+            conn.execute('DELETE FROM users WHERE id = ?', (user_id,))
+            conn.commit()
+            conn.close()
+            
+            return jsonify({
+                'ok': True,
+                'message': f'User "{user["username"]}" deleted successfully'
+            })
+            
+        except Exception as e:
+            conn.close()
+            return jsonify({'error': f'Database error: {str(e)}'}), 500
 
     return app
 
