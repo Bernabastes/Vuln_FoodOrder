@@ -1,8 +1,4 @@
 node_modules/
-<<<<<<< HEAD
 frontend/.next/
-=======
-.next/
->>>>>>> berne
 frontend/node_modules/
 venv/

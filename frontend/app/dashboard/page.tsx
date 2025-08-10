@@ -228,29 +228,20 @@ export default function DashboardPage() {
               e.preventDefault()
               setIsCreating(true)
               setCreateMessage(null)
-              
+
               const formData = new FormData(e.currentTarget)
-              const restaurantData = {
-                name: formData.get('name') as string,
-                address: formData.get('address') as string,
-                username: formData.get('username') as string,
-                email: formData.get('email') as string,
-                password: formData.get('password') as string
-              }
-              
+
               try {
                 const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
                 const response = await fetch(`${base}/api/admin/restaurant/create`, {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
                   credentials: 'include',
-                  body: JSON.stringify(restaurantData)
+                  body: formData
                 })
-                
+
                 if (response.ok) {
                   const result = await response.json()
                   setCreateMessage({ type: 'success', text: result.message || 'Restaurant created successfully!' })
-                  // Reset form using the ref
                   if (formRef.current) {
                     formRef.current.reset()
                   }
@@ -289,6 +280,11 @@ export default function DashboardPage() {
                 <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">Owner Password *</label>
                 <input type="password" id="password" name="password" required className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 <p className="text-xs text-gray-500 mt-1">A new owner account will be created with these credentials</p>
+              </div>
+              <div>
+                <label htmlFor="logo" className="block text-sm font-medium text-gray-700 mb-1">Poster Image (file) *</label>
+                <input type="file" id="logo" name="logo" accept="image/*" required className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <p className="text-xs text-gray-500 mt-1">Required. Upload an image to show on the restaurant card.</p>
               </div>
               <div className="flex items-end">
                 <button 

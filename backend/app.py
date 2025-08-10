@@ -6,9 +6,24 @@ import os
 from datetime import timedelta
 from werkzeug.utils import secure_filename
 
+# Optional Postgres and Cloudinary support
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+except Exception:  # psycopg may not be installed yet
+    psycopg = None  # type: ignore
+    dict_row = None  # type: ignore
+
+try:
+    import cloudinary
+    import cloudinary.uploader
+except Exception:
+    cloudinary = None  # type: ignore
+
 
 class ApiConfig:
     DATABASE_PATH = os.environ.get("DATABASE_PATH", "/app/vulneats.db")
+    DATABASE_URL = os.environ.get("DATABASE_URL")
     SECRET_KEY = os.environ.get("SECRET_KEY", "vulneats-secret-key-change-in-production")
     PERMANENT_SESSION_LIFETIME = timedelta(hours=24)
     UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/app/uploads")
@@ -21,10 +36,65 @@ def create_app() -> Flask:
 
     os.makedirs(ApiConfig.UPLOAD_FOLDER, exist_ok=True)
 
+    # Configure Cloudinary if available
+    if cloudinary is not None:
+        cloudinary_url = os.environ.get("CLOUDINARY_URL")
+        if cloudinary_url:
+            cloudinary.config(cloudinary_url=cloudinary_url, secure=True)
+        else:
+            cloud_name = os.environ.get("CLOUDINARY_CLOUD_NAME")
+            api_key = os.environ.get("CLOUDINARY_API_KEY")
+            api_secret = os.environ.get("CLOUDINARY_API_SECRET")
+            if cloud_name and api_key and api_secret:
+                cloudinary.config(
+                    cloud_name=cloud_name,
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    secure=True,
+                )
+
+    use_postgres = bool(ApiConfig.DATABASE_URL and psycopg is not None)
+
+    class DatabaseConnection:
+        def __init__(self, conn, is_postgres: bool):
+            self._conn = conn
+            self._is_pg = is_postgres
+
+        def execute(self, sql: str, params=()):
+            if self._is_pg:
+                sql = sql.replace("?", "%s")
+                return self._conn.execute(sql, params)
+            return self._conn.execute(sql, params)
+
+        def commit(self):
+            return self._conn.commit()
+
+        def close(self):
+            return self._conn.close()
+
     def get_db_connection():
+        if use_postgres:
+            conn = psycopg.connect(ApiConfig.DATABASE_URL, row_factory=dict_row)
+            return DatabaseConnection(conn, True)
         conn = sqlite3.connect(ApiConfig.DATABASE_PATH)
         conn.row_factory = sqlite3.Row
-        return conn
+        return DatabaseConnection(conn, False)
+
+    def insert_and_get_id(conn: DatabaseConnection, insert_sql: str, params) -> int:
+        if use_postgres:
+            cur = conn.execute(insert_sql + " RETURNING id", params)
+            row = cur.fetchone()
+            if row is None:
+                return 0
+            return int(row["id"]) if isinstance(row, dict) else int(row[0])
+        cur = conn.execute(insert_sql, params)
+        try:
+            return int(cur.lastrowid)
+        except Exception:
+            row = conn.execute("SELECT last_insert_rowid() AS id").fetchone()
+            return int(row["id"]) if row else 0
+
+    # NOTE: get_db_connection redefined above to support Postgres
 
     def login_required_json(fn):
         def wrapper(*args, **kwargs):
@@ -260,11 +330,14 @@ def create_app() -> Flask:
             menu_item = conn.execute('SELECT * FROM menu_items WHERE id = ?', (item['menu_item_id'],)).fetchone()
             if menu_item:
                 total += menu_item['price'] * int(item['quantity'])
-        cursor = conn.execute('''
+        order_id = insert_and_get_id(
+            conn,
+            '''
             INSERT INTO orders (user_id, restaurant_id, total_amount, status)
             VALUES (?, ?, ?, ?)
-        ''', (session['user_id'], restaurant_id, total, 'pending'))
-        order_id = cursor.lastrowid
+            ''',
+            (session['user_id'], restaurant_id, total, 'pending')
+        )
         for item in session['cart']:
             conn.execute('''
                 INSERT INTO order_items (order_id, menu_item_id, quantity, special_instructions)
@@ -304,9 +377,31 @@ def create_app() -> Flask:
         if 'image' in request.files:
             file = request.files['image']
             if file and file.filename:
-                filename = secure_filename(file.filename)
-                file.save(os.path.join(ApiConfig.UPLOAD_FOLDER, filename))
-                image_path = filename
+                # Prefer Cloudinary if configured; fallback to local if upload fails
+                image_path = None
+                use_cloud = (
+                    cloudinary is not None and (
+                        os.environ.get('CLOUDINARY_URL') or (
+                            os.environ.get('CLOUDINARY_CLOUD_NAME') and
+                            os.environ.get('CLOUDINARY_API_KEY') and
+                            os.environ.get('CLOUDINARY_API_SECRET')
+                        )
+                    )
+                )
+                if use_cloud:
+                    try:
+                        upload_result = cloudinary.uploader.upload(
+                            file,
+                            folder='vulneats/menu_items',
+                            resource_type='image',
+                        )
+                        image_path = upload_result.get('secure_url') or upload_result.get('url')
+                    except Exception:
+                        image_path = None
+                if not image_path:
+                    filename = secure_filename(file.filename)
+                    file.save(os.path.join(ApiConfig.UPLOAD_FOLDER, filename))
+                    image_path = filename
 
         
         conn = get_db_connection()
@@ -315,7 +410,6 @@ def create_app() -> Flask:
         if not restaurant:
             conn.close()
             return jsonify({'error': 'no_restaurant'}), 400
-        
         conn.execute('''
             INSERT INTO menu_items (restaurant_id, name, description, price, image_path)
             VALUES (?, ?, ?, ?, ?)
@@ -363,19 +457,58 @@ def create_app() -> Flask:
     @app.post('/api/admin/restaurant/create')
     @admin_required_json
     def api_admin_create_restaurant():
-        data = request.get_json() or {}
-        name = data.get('name', '').strip()
-        address = data.get('address', '').strip()
-        username = data.get('username', '').strip()
-        email = data.get('email', '').strip()
-        password = data.get('password', '').strip()
-        
+        """Create a restaurant and owner user via multipart/form-data with required image file 'logo'."""
+        name = (request.form.get('name') or '').strip()
+        address = (request.form.get('address') or '').strip()
+        username = (request.form.get('username') or '').strip()
+        email = (request.form.get('email') or '').strip()
+        password = (request.form.get('password') or '').strip()
+
         if not name or not address:
             return jsonify({'error': 'Name and address are required'}), 400
-        
+
         if not username or not email or not password:
             return jsonify({'error': 'Username, email, and password are required'}), 400
-        
+
+        # Require image file
+        if 'logo' not in request.files:
+            return jsonify({'error': 'Poster image file (logo) is required'}), 400
+        file = request.files['logo']
+        if not file or not file.filename:
+            return jsonify({'error': 'Poster image file (logo) is required'}), 400
+
+        # Upload/store image
+        logo_path = None
+        use_cloud = (
+            cloudinary is not None and (
+                os.environ.get('CLOUDINARY_URL') or (
+                    os.environ.get('CLOUDINARY_CLOUD_NAME') and
+                    os.environ.get('CLOUDINARY_API_KEY') and
+                    os.environ.get('CLOUDINARY_API_SECRET')
+                )
+            )
+        )
+        if use_cloud:
+            try:
+                upload_result = cloudinary.uploader.upload(
+                    file,
+                    folder='vulneats/restaurants',
+                    resource_type='image',
+                )
+                logo_path = upload_result.get('secure_url') or upload_result.get('url')
+            except Exception:
+                logo_path = None
+        if not logo_path:
+            filename = secure_filename(file.filename)
+            file.save(os.path.join(ApiConfig.UPLOAD_FOLDER, filename))
+            logo_path = filename
+
+        if not name or not address:
+            return jsonify({'error': 'Name and address are required'}), 400
+
+        if not username or not email or not password:
+            return jsonify({'error': 'Username, email, and password are required'}), 400
+
         conn = get_db_connection()
         try:
             # Check if username or email already exists
@@ -383,33 +516,37 @@ def create_app() -> Flask:
             if existing_user:
                 conn.close()
                 return jsonify({'error': 'Username or email already exists'}), 400
-            
+
             # Create new owner user
             hashed_password = hashlib.md5(password.encode()).hexdigest()
-            cursor = conn.execute('''
+            owner_id = insert_and_get_id(
+                conn,
+                '''
                 INSERT INTO users (username, email, password_hash, role, created_at)
                 VALUES (?, ?, ?, 'owner', CURRENT_TIMESTAMP)
-            ''', (username, email, hashed_password))
-            
-            owner_id = cursor.lastrowid
-            
+                ''',
+                (username, email, hashed_password)
+            )
+
             # Create the restaurant
-            cursor = conn.execute('''
+            restaurant_id = insert_and_get_id(
+                conn,
+                '''
                 INSERT INTO restaurants (owner_id, name, address, logo_path, created_at)
                 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ''', (owner_id, name, address, None))
-            
-            restaurant_id = cursor.lastrowid
+                ''',
+                (owner_id, name, address, logo_path)
+            )
             conn.commit()
             conn.close()
-            
+
             return jsonify({
-                'ok': True, 
+                'ok': True,
                 'restaurant_id': restaurant_id,
                 'owner_id': owner_id,
                 'message': f'Restaurant "{name}" created successfully with owner "{username}"'
             })
-            
+
         except Exception as e:
             conn.close()
             return jsonify({'error': f'Database error: {str(e)}'}), 500
