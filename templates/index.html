@@ -1,111 +1,233 @@
-{% extends "base.html" %}
+import {
+  Search,
+  Utensils,
+  User,
+  ShoppingCart,
+  Tally3Icon as TachometerIcon,
+  UserPlus,
+  LogIn,
+  Pizza,
+  BeefIcon as Burger,
+  Star,
+  Info,
+  AlertTriangle,
+} from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 
-{% block title %}VulnEats - Home{% endblock %}
+// Mock session data - in real app this would come from your auth system
+const mockSession = {
+  user_id: null, // Set to a value to simulate logged in user
+}
 
-{% block content %}
-<div class="row">
-    <div class="col-md-8">
-        <div class="jumbotron bg-light p-5 rounded">
-            <h1 class="display-4">Welcome to VulnEats</h1>
-            <p class="lead">Order delicious food from your favorite restaurants with just a few clicks!</p>
-            <hr class="my-4">
-            <p>Discover amazing dishes, place orders, and track your delivery in real-time.</p>
-            <a class="btn btn-primary btn-lg" href="{{ url_for('restaurants') }}" role="button">
-                <i class="fas fa-utensils"></i> Browse Restaurants
-            </a>
-        </div>
-    </div>
-    <div class="col-md-4">
-        <div class="card">
-            <div class="card-header">
-                <h5><i class="fas fa-search"></i> Search Menu Items</h5>
-            </div>
-            <div class="card-body">
-                <form action="{{ url_for('search') }}" method="GET">
-                    <div class="input-group">
-                        <input type="text" class="form-control" name="q" placeholder="Search for dishes..." required>
-                        <button class="btn btn-outline-primary" type="submit">
-                            <i class="fas fa-search"></i>
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-        
-        {% if session.user_id %}
-        <div class="card mt-3">
-            <div class="card-header">
-                <h5><i class="fas fa-user"></i> Quick Actions</h5>
-            </div>
-            <div class="card-body">
-                <a href="{{ url_for('dashboard') }}" class="btn btn-outline-primary btn-sm w-100 mb-2">
-                    <i class="fas fa-tachometer-alt"></i> View Dashboard
-                </a>
-                <a href="{{ url_for('view_cart') }}" class="btn btn-outline-success btn-sm w-100">
-                    <i class="fas fa-shopping-cart"></i> View Cart
-                </a>
-            </div>
-        </div>
-        {% else %}
-        <div class="card mt-3">
-            <div class="card-header">
-                <h5><i class="fas fa-sign-in-alt"></i> Get Started</h5>
-            </div>
-            <div class="card-body">
-                <a href="{{ url_for('login') }}" class="btn btn-primary btn-sm w-100 mb-2">
-                    <i class="fas fa-sign-in-alt"></i> Login
-                </a>
-                <a href="{{ url_for('register') }}" class="btn btn-outline-primary btn-sm w-100">
-                    <i class="fas fa-user-plus"></i> Register
-                </a>
-            </div>
-        </div>
-        {% endif %}
-    </div>
-</div>
+export default function HomePage() {
+  const isLoggedIn = !!mockSession.user_id
 
-<div class="row mt-5">
-    <div class="col-12">
-        <h2><i class="fas fa-star"></i> Featured Restaurants</h2>
-        <div class="row">
-            <div class="col-md-6">
-                <div class="card menu-item">
-                    <div class="card-body">
-                        <h5 class="card-title">
-                            <i class="fas fa-pizza-slice"></i> Pizza Palace
-                        </h5>
-                        <p class="card-text">Delicious pizzas with fresh ingredients and authentic recipes.</p>
-                        <a href="{{ url_for('restaurant_menu', restaurant_id=1) }}" class="btn btn-primary">
-                            View Menu
-                        </a>
-                    </div>
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-orange-50 via-white to-red-50">
+      {/* Navigation */}
+      <nav className="bg-white shadow-sm border-b">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center h-16">
+            <div className="flex items-center space-x-2">
+              <Utensils className="h-8 w-8 text-orange-600" />
+              <span className="text-2xl font-bold text-gray-900">VulnEats</span>
+            </div>
+            <div className="flex items-center space-x-4">
+              {isLoggedIn ? (
+                <>
+                  <Button variant="ghost" size="sm">
+                    <User className="h-4 w-4 mr-2" />
+                    Dashboard
+                  </Button>
+                  <Button variant="ghost" size="sm">
+                    <ShoppingCart className="h-4 w-4 mr-2" />
+                    Cart
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button variant="ghost" size="sm">
+                    <LogIn className="h-4 w-4 mr-2" />
+                    Login
+                  </Button>
+                  <Button size="sm">
+                    <UserPlus className="h-4 w-4 mr-2" />
+                    Register
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Main Content */}
+          <div className="lg:col-span-2">
+            {/* Hero Section */}
+            <div className="bg-gradient-to-r from-orange-500 to-red-500 rounded-2xl p-8 text-white shadow-xl">
+              <div className="max-w-2xl">
+                <h1 className="text-4xl md:text-5xl font-bold mb-4">Welcome to VulnEats</h1>
+                <p className="text-xl mb-6 text-orange-100">
+                  Order delicious food from your favorite restaurants with just a few clicks!
+                </p>
+                <div className="h-px bg-orange-300 my-6"></div>
+                <p className="text-lg mb-8 text-orange-100">
+                  Discover amazing dishes, place orders, and track your delivery in real-time.
+                </p>
+                <Button size="lg" className="bg-white text-orange-600 hover:bg-orange-50 font-semibold">
+                  <Utensils className="h-5 w-5 mr-2" />
+                  Browse Restaurants
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* Sidebar */}
+          <div className="space-y-6">
+            {/* Search Card */}
+            <Card className="shadow-lg border-0 bg-white/80 backdrop-blur">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center text-lg">
+                  <Search className="h-5 w-5 mr-2 text-orange-600" />
+                  Search Menu Items
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex space-x-2">
+                  <Input placeholder="Search for dishes..." className="flex-1" />
+                  <Button size="icon" className="bg-orange-600 hover:bg-orange-700">
+                    <Search className="h-4 w-4" />
+                  </Button>
                 </div>
-            </div>
-            <div class="col-md-6">
-                <div class="card menu-item">
-                    <div class="card-body">
-                        <h5 class="card-title">
-                            <i class="fas fa-hamburger"></i> Burger House
-                        </h5>
-                        <p class="card-text">Juicy burgers and crispy fries made with premium beef.</p>
-                        <a href="{{ url_for('restaurant_menu', restaurant_id=2) }}" class="btn btn-primary">
-                            View Menu
-                        </a>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
+              </CardContent>
+            </Card>
 
-<div class="row mt-5">
-    <div class="col-12">
-        <div class="alert alert-info">
-            <h5><i class="fas fa-info-circle"></i> About VulnEats</h5>
-            <p>This is a cybersecurity lab project designed to demonstrate common web application vulnerabilities. 
-            The application intentionally contains security flaws for educational purposes.</p>
-            <small class="text-muted">⚠️ This application is for educational use only. Do not use in production.</small>
+            {/* User Actions Card */}
+            <Card className="shadow-lg border-0 bg-white/80 backdrop-blur">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center text-lg">
+                  {isLoggedIn ? (
+                    <>
+                      <User className="h-5 w-5 mr-2 text-orange-600" />
+                      Quick Actions
+                    </>
+                  ) : (
+                    <>
+                      <LogIn className="h-5 w-5 mr-2 text-orange-600" />
+                      Get Started
+                    </>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {isLoggedIn ? (
+                  <>
+                    <Button variant="outline" className="w-full justify-start bg-transparent">
+                      <TachometerIcon className="h-4 w-4 mr-2" />
+                      View Dashboard
+                    </Button>
+                    <Button variant="outline" className="w-full justify-start bg-transparent">
+                      <ShoppingCart className="h-4 w-4 mr-2" />
+                      View Cart
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Button className="w-full justify-start bg-orange-600 hover:bg-orange-700">
+                      <LogIn className="h-4 w-4 mr-2" />
+                      Login
+                    </Button>
+                    <Button variant="outline" className="w-full justify-start bg-transparent">
+                      <UserPlus className="h-4 w-4 mr-2" />
+                      Register
+                    </Button>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </div>
+
+        {/* Featured Restaurants */}
+        <div className="mt-12">
+          <div className="flex items-center mb-8">
+            <Star className="h-6 w-6 mr-3 text-yellow-500" />
+            <h2 className="text-3xl font-bold text-gray-900">Featured Restaurants</h2>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <Card className="group hover:shadow-xl transition-all duration-300 border-0 shadow-lg bg-white/80 backdrop-blur overflow-hidden">
+              <div className="bg-gradient-to-r from-red-500 to-orange-500 h-2"></div>
+              <CardContent className="p-6">
+                <div className="flex items-center mb-4">
+                  <div className="bg-red-100 p-3 rounded-full mr-4">
+                    <Pizza className="h-6 w-6 text-red-600" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-semibold text-gray-900">Pizza Palace</h3>
+                    <Badge variant="secondary" className="mt-1">
+                      Italian Cuisine
+                    </Badge>
+                  </div>
+                </div>
+                <p className="text-gray-600 mb-4">Delicious pizzas with fresh ingredients and authentic recipes.</p>
+                <Button className="w-full bg-red-600 hover:bg-red-700 group-hover:bg-red-700 transition-colors">
+                  View Menu
+                </Button>
+              </CardContent>
+            </Card>
+
+            <Card className="group hover:shadow-xl transition-all duration-300 border-0 shadow-lg bg-white/80 backdrop-blur overflow-hidden">
+              <div className="bg-gradient-to-r from-yellow-500 to-orange-500 h-2"></div>
+              <CardContent className="p-6">
+                <div className="flex items-center mb-4">
+                  <div className="bg-yellow-100 p-3 rounded-full mr-4">
+                    <Burger className="h-6 w-6 text-yellow-600" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-semibold text-gray-900">Burger House</h3>
+                    <Badge variant="secondary" className="mt-1">
+                      American Cuisine
+                    </Badge>
+                  </div>
+                </div>
+                <p className="text-gray-600 mb-4">Juicy burgers and crispy fries made with premium beef.</p>
+                <Button className="w-full bg-yellow-600 hover:bg-yellow-700 group-hover:bg-yellow-700 transition-colors">
+                  View Menu
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+
+        {/* About Section */}
+        <div className="mt-12">
+          <Alert className="border-blue-200 bg-blue-50/80 backdrop-blur">
+            <Info className="h-5 w-5 text-blue-600" />
+            <AlertDescription className="text-blue-800">
+              <div className="space-y-2">
+                <h5 className="font-semibold text-lg">About VulnEats</h5>
+                <p>
+                  This is a cybersecurity lab project designed to demonstrate common web application vulnerabilities.
+                  The application intentionally contains security flaws for educational purposes.
+                </p>
+                <div className="flex items-center space-x-2 text-sm text-blue-700 bg-blue-100 p-2 rounded-md">
+                  <AlertTriangle className="h-4 w-4" />
+                  <span className="font-medium">
+                    This application is for educational use only. Do not use in production.
+                  </span>
+                </div>
+              </div>
+            </AlertDescription>
+          </Alert>
+        </div>
+      </div>
     </div>
-</div>
-{% endblock %}
+  )
+}
