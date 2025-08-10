@@ -1,0 +1,308 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard - VulnEats{% endblock %}
+
+{% block content %}
+<style>
+    .dashboard-header {
+        background: #ffffff;
+        color: rgb(0, 0, 0);
+        padding: 2rem 0;
+        margin: -1rem -15px 2rem -15px;
+        border-radius: 0 0 20px 20px;
+    }
+    
+    .stats-card {
+        background: #ffffff;
+        color: rgb(0, 0, 0);
+        border: none;
+        border-radius: 15px;
+        transition: transform 0.3s ease;
+    }
+    
+    .stats-card:hover {
+        transform: translateY(-5px);
+    }
+    
+    .modern-card {
+        border: none;
+        border-radius: 15px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        transition: transform 0.3s ease;
+    }
+    
+    .modern-card:hover {
+        transform: translateY(-2px);
+    }
+    
+    .modern-card .card-header {
+        background: #c93e3e;
+        color: white;
+        border: none;
+        padding: 1.25rem;
+        font-weight: 600;
+    }
+    
+    .secondary-card .card-header {
+        background: #f8f9fa;
+        color: #333;
+        border-bottom: 1px solid #dee2e6;
+    }
+    
+    .item-card {
+        background: #f8f9fa;
+        border-radius: 10px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+        border-left: 4px solid #ffffff;
+        transition: all 0.3s ease;
+    }
+    
+    .item-card:hover {
+        background: #e9ecef;
+        transform: translateX(5px);
+    }
+    
+    .status-badge {
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+    
+    .btn-modern {
+        border-radius: 25px;
+        padding: 0.75rem 1.5rem;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        border: none;
+    }
+    
+    .btn-primary-modern {
+        background: #c93e3e;
+        color: white;
+    }
+    
+    .btn-primary-modern:hover {
+        background: #ffffff;
+        transform: translateY(-2px);
+    }
+    
+    .btn-outline-modern {
+        background: white;
+        border: 2px solid #c93e3e;
+        color: #000000;
+    }
+    
+    .btn-outline-modern:hover {
+        background: #c93e3e;
+        color: white;
+        transform: translateY(-2px);
+    }
+    
+    .info-alert {
+        background: #ffffff;
+        color: rgb(0, 0, 0);
+        border: none;
+        border-radius: 15px;
+        padding: 1.5rem;
+    }
+    
+    .icon-wrapper {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        background: rgba(255,255,255,0.2);
+        border-radius: 50%;
+        margin-right: 10px;
+    }
+    
+    .stat-number {
+        font-size: 2.5rem;
+        font-weight: 700;
+        margin-bottom: 0;
+    }
+    
+    .stat-label {
+        font-size: 0.9rem;
+        opacity: 0.9;
+        text-transform: uppercase;
+    }
+</style>
+
+<div class="dashboard-header text-center">
+    <div class="container">
+        <h1 class="mb-2">
+            <span class="icon-wrapper">
+                <i class="fas fa-shield-alt"></i>
+            </span>
+            Admin Dashboard
+        </h1>
+        <p class="mb-0">VulnEats System Administration Panel</p>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-6 mb-3">
+        <div class="card stats-card text-center">
+            <div class="card-body py-4">
+                <div class="row">
+                    <div class="col-6">
+                        <div class="stat-number">{{ restaurants|length }}</div>
+                        <div class="stat-label">Restaurants</div>
+                    </div>
+                    <div class="col-6">
+                        <div class="stat-number">{{ orders|length }}</div>
+                        <div class="stat-label">Total Orders</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 mb-3">
+        <div class="card modern-card secondary-card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-cogs me-2"></i>
+                    Quick Actions
+                </h5>
+            </div>
+            <div class="card-body">
+                <a href="{{ url_for('admin_users') }}" class="btn btn-primary-modern btn-modern w-100 mb-2">
+                    <i class="fas fa-users me-2"></i> Manage Users
+                </a>
+                <a href="{{ url_for('admin_logs') }}" class="btn btn-outline-modern btn-modern w-100">
+                    <i class="fas fa-file-alt me-2"></i> View System Logs
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-6 mb-4">
+        <div class="card modern-card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-utensils me-2"></i>
+                    Restaurants
+                </h5>
+            </div>
+            <div class="card-body">
+                {% if restaurants %}
+                    <div style="max-height: 400px; overflow-y: auto;">
+                        {% for restaurant in restaurants %}
+                        <div class="item-card">
+                            <h6 class="mb-2   fw-bold">{{ restaurant.name }}</h6>
+                            <div class="text-muted small">
+                                <div class="mb-1">
+                                    <i class="fas fa-map-marker-alt me-2  "></i>
+                                    {{ restaurant.address }}
+                                </div>
+                                <div>
+                                    <i class="fas fa-calendar me-2  "></i>
+                                    {{ restaurant.created_at }}
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="text-center py-4">
+                        <i class="fas fa-utensils fa-3x text-muted mb-3"></i>
+                        <p class="text-muted">No restaurants found.</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-6 mb-4">
+        <div class="card modern-card">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-shopping-cart me-2"></i>
+                    Recent Orders
+                </h5>
+            </div>
+            <div class="card-body">
+                {% if orders %}
+                    <div style="max-height: 400px; overflow-y: auto;">
+                        {% for order in orders[:5] %}
+                        <div class="item-card">
+                            <div class="d-flex justify-content-between align-items-start mb-2">
+                                <h6 class="mb-0 fw-bold">Order #{{ order.id }}</h6>
+                                <span class="status-badge bg-{{ 'warning' if order.status == 'pending' else 'info' if order.status == 'cooking' else 'success' if order.status == 'delivered' else 'danger' }}">
+                                    {{ order.status.title() }}
+                                </span>
+                            </div>
+                            <div class="text-muted small">
+                                <div class="mb-1">
+                                    <i class="fas fa-user me-2  "></i>
+                                    {{ order.username }}
+                                </div>
+                                <div class="mb-1">
+                                    <i class="fas fa-utensils me-2 "></i>
+                                    {{ order.restaurant_name }}
+                                </div>
+                                <div class="fw-bold text-dark">
+                                    <i class="fas fa-dollar-sign me-2  "></i>
+                                    ${{ "%.2f"|format(order.total_amount) }}
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="text-center py-4">
+                        <i class="fas fa-shopping-cart fa-3x text-muted mb-3"></i>
+                        <p class="text-muted">No orders found.</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="alert info-alert">
+            <h5 class="mb-3">
+                <span class="icon-wrapper">
+                    <i class="fas fa-info-circle"></i>
+                </span>
+                Admin Features
+            </h5>
+            <div class="row">
+                <div class="col-md-6">
+                    <ul class="list-unstyled mb-0">
+                        <li class="mb-2">
+                            <i class="fas fa-check-circle me-2"></i>
+                            View all restaurants and their details
+                        </li>
+                        <li class="mb-2">
+                            <i class="fas fa-check-circle me-2"></i>
+                            Monitor all orders across the system
+                        </li>
+                    </ul>
+                </div>
+                <div class="col-md-6">
+                    <ul class="list-unstyled mb-0">
+                        <li class="mb-2">
+                            <i class="fas fa-check-circle me-2"></i>
+                            Manage user accounts and permissions
+                        </li>
+                        <li class="mb-2">
+                            <i class="fas fa-check-circle me-2"></i>
+                            Access system logs for monitoring
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

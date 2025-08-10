@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}{{ restaurant.name }} - Menu{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="{{ url_for('restaurants') }}">Restaurants</a></li>
+                <li class="breadcrumb-item active">{{ restaurant.name }}</li>
+            </ol>
+        </nav>
+        
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h2><i class="fas fa-utensils"></i> {{ restaurant.name }}</h2>
+                <p class="text-muted">
+                    <i class="fas fa-map-marker-alt"></i> {{ restaurant.address }}
+                </p>
+            </div>
+            {% if session.user_id %}
+            <div>
+                <a href="{{ url_for('view_cart') }}" class="btn btn-outline-primary">
+                    <i class="fas fa-shopping-cart"></i> View Cart
+                </a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    {% for item in menu_items %}
+    <div class="col-md-6 col-lg-4 mb-4">
+        <div class="card menu-item h-100">
+            {% if item.image_path %}
+            <img src="{{ url_for('uploaded_file', filename=item.image_path) }}" class="card-img-top" alt="{{ item.name }}" style="height: 200px; object-fit: cover;">
+            {% else %}
+            <div class="card-img-top bg-light d-flex align-items-center justify-content-center" style="height: 200px;">
+                <i class="fas fa-utensils fa-3x text-muted"></i>
+            </div>
+            {% endif %}
+            <div class="card-body">
+                <h5 class="card-title">{{ item.name }}</h5>
+                <p class="card-text">{{ item.description }}</p>
+                <p class="card-text">
+                    <strong class="text-primary">${{ "%.2f"|format(item.price) }}</strong>
+                </p>
+                
+                {% if session.user_id %}
+                <form method="POST" action="{{ url_for('add_to_cart') }}">
+                    <input type="hidden" name="menu_item_id" value="{{ item.id }}">
+                    <div class="mb-3">
+                        <label for="quantity_{{ item.id }}" class="form-label">Quantity</label>
+                        <input type="number" class="form-control" id="quantity_{{ item.id }}" name="quantity" value="1" min="1" max="10">
+                    </div>
+                    <div class="mb-3">
+                        <label for="special_{{ item.id }}" class="form-label">Special Instructions</label>
+                        <textarea class="form-control" id="special_{{ item.id }}" name="special_instructions" rows="2" placeholder="Any special requests? (e.g., no onions, extra cheese)"></textarea>
+                        <small class="text-muted">VULNERABLE: This field is susceptible to XSS attacks</small>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="fas fa-cart-plus"></i> Add to Cart
+                    </button>
+                </form>
+                {% else %}
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle"></i> Please <a href="{{ url_for('login') }}">login</a> to order
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% if not menu_items %}
+<div class="row">
+    <div class="col-12">
+        <div class="alert alert-info">
+            <i class="fas fa-info-circle"></i> No menu items available at this time.
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

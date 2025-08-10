@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./vulneats.db:/app/vulneats.db
+    environment:
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+      - DATABASE_PATH=/app/vulneats.db
+      - UPLOAD_FOLDER=/app/uploads
+    restart: unless-stopped
+    command: python backend/app.py
+
+  frontend:
+    build:
+      context: frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_BASE=http://localhost:5001
+      - INTERNAL_API_BASE=http://backend:5001
+    depends_on:
+      - backend

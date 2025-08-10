@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Users - VulnEats{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="{{ url_for('dashboard') }}">Dashboard</a></li>
+                <li class="breadcrumb-item active">Manage Users</li>
+            </ol>
+        </nav>
+        
+        <h2><i class="fas fa-users"></i> Manage Users</h2>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5>All Users ({{ users|length }})</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Username</th>
+                                <th>Email</th>
+                                <th>Role</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for user in users %}
+                            <tr>
+                                <td>{{ user.id }}</td>
+                                <td>{{ user.username }}</td>
+                                <td>{{ user.email }}</td>
+                                <td>
+                                    <span class="badge bg-{{ 'danger' if user.role == 'admin' else 'warning' if user.role == 'owner' else 'primary' }}">
+                                        {{ user.role.title() }}
+                                    </span>
+                                </td>
+                                <td>{{ user.created_at }}</td>
+                                <td>
+                                    <button class="btn btn-sm btn-outline-primary" onclick="alert('User management features not implemented')">
+                                        <i class="fas fa-edit"></i> Edit
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-danger" onclick="alert('User deletion not implemented')">
+                                        <i class="fas fa-trash"></i> Delete
+                                    </button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="alert alert-info">
+            <h6><i class="fas fa-info-circle"></i> User Management</h6>
+            <ul class="mb-0">
+                <li>View all registered users in the system</li>
+                <li>Monitor user roles and permissions</li>
+                <li>Track user registration dates</li>
+                <li>Manage user accounts (features not implemented)</li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
