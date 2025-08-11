@@ -254,12 +254,45 @@ def create_app() -> Flask:
                     WHERE o.restaurant_id = ?
                     ORDER BY o.created_at DESC
                 ''', (restaurant['id'],)).fetchall()
+                # Enrich orders with item names and quantities
+                orders_list = [dict(o) for o in orders]
+                if orders_list:
+                    order_ids = [o['id'] for o in orders_list]
+                    placeholders = ','.join(['?'] * len(order_ids))
+                    items_rows = conn.execute(
+                        f'''
+                        SELECT oi.order_id, oi.quantity, mi.name
+                        FROM order_items oi
+                        JOIN menu_items mi ON oi.menu_item_id = mi.id
+                        WHERE oi.order_id IN ({placeholders})
+                        ''',
+                        tuple(order_ids)
+                    ).fetchall()
+                    items_by_order = {}
+                    for row in items_rows:
+                        oid = row['order_id'] if isinstance(row, dict) else row[0]
+                        quantity = row['quantity'] if isinstance(row, dict) else row[1]
+                        name = row['name'] if isinstance(row, dict) else row[2]
+                        items_by_order.setdefault(oid, []).append({
+                            'name': name,
+                            'quantity': quantity,
+                        })
+                    for od in orders_list:
+                        od_items = items_by_order.get(od['id'], [])
+                        od['items'] = od_items
+                        if od_items:
+                            od['item_names'] = ', '.join([
+                                f"{it['name']} x{it['quantity']}" if int(it.get('quantity', 1)) > 1 else f"{it['name']}"
+                                for it in od_items
+                            ])
+                        else:
+                            od['item_names'] = ''
                 menu_items = conn.execute('SELECT * FROM menu_items WHERE restaurant_id = ?', (restaurant['id'],)).fetchall()
                 conn.close()
                 return jsonify({
                     'role': 'owner',
                     'restaurant': dict(restaurant),
-                    'orders': [dict(o) for o in orders],
+                    'orders': orders_list,
                     'menu_items': [dict(m) for m in menu_items],
                 })
             conn.close()
@@ -271,11 +304,45 @@ def create_app() -> Flask:
                 WHERE o.user_id = ?
                 ORDER BY o.created_at DESC
             ''', (session['user_id'],)).fetchall()
+            # Build enriched order data with item names for display
+            orders_list = [dict(o) for o in orders]
+            if orders_list:
+                order_ids = [o['id'] for o in orders_list]
+                placeholders = ','.join(['?'] * len(order_ids))
+                items_rows = conn.execute(
+                    f'''
+                    SELECT oi.order_id, oi.quantity, mi.name
+                    FROM order_items oi
+                    JOIN menu_items mi ON oi.menu_item_id = mi.id
+                    WHERE oi.order_id IN ({placeholders})
+                    ''',
+                    tuple(order_ids)
+                ).fetchall()
+                items_by_order = {}
+                for row in items_rows:
+                    oid = row['order_id'] if isinstance(row, dict) else row[0]
+                    quantity = row['quantity'] if isinstance(row, dict) else row[1]
+                    name = row['name'] if isinstance(row, dict) else row[2]
+                    items_by_order.setdefault(oid, []).append({
+                        'name': name,
+                        'quantity': quantity,
+                    })
+                for od in orders_list:
+                    od_items = items_by_order.get(od['id'], [])
+                    od['items'] = od_items
+                    # Precompute a compact display string like: "Pizza x2, Burger"
+                    if od_items:
+                        od['item_names'] = ', '.join([
+                            f"{it['name']} x{it['quantity']}" if int(it.get('quantity', 1)) > 1 else f"{it['name']}"
+                            for it in od_items
+                        ])
+                    else:
+                        od['item_names'] = ''
             restaurants = conn.execute('SELECT * FROM restaurants').fetchall()
             conn.close()
             return jsonify({
                 'role': 'customer',
-                'orders': [dict(o) for o in orders],
+                'orders': orders_list,
                 'restaurants': [dict(r) for r in restaurants],
             })
 

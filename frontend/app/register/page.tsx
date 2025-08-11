@@ -1,5 +1,6 @@
 'use client'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { useState } from 'react'
 
 export default function RegisterPage() {
@@ -47,6 +48,10 @@ export default function RegisterPage() {
           {error && <p className="text-red-600 text-sm">{error}</p>}
           <button className="w-full bg-blue-600 text-white px-4 py-2 rounded" type="submit">Sign up</button>
         </form>
+        <div className="mt-4 text-sm text-center">
+          <span>Already have an account? </span>
+          <Link href="/login" className="text-blue-600 hover:underline">Log in</Link>
+        </div>
       </div>
     </main>
   )

@@ -83,7 +83,7 @@ export default function DashboardPage() {
                 {data.orders.map((o: any) => (
                   <div key={o.id} className="grid grid-cols-3 gap-4 items-center border-b pb-3">
                     <div className="col-span-2">
-                      <h6 className="font-semibold">Order #{o.id}</h6>
+                      <h6 className="font-semibold">{o.item_names || `Order #${o.id}`}</h6>
                       <p className="text-sm text-gray-600">
                         🍽️ {o.restaurant_name}
                         <br />
@@ -136,7 +136,7 @@ export default function DashboardPage() {
                   {data.orders.map((o: any) => (
                     <div key={o.id} className="grid md:grid-cols-2 gap-4 border-b pb-3">
                       <div>
-                        <h6 className="font-semibold">Order #{o.id}</h6>
+                      <h6 className="font-semibold">{o.item_names || `Order #${o.id}`}</h6>
                         <p className="text-sm text-gray-600">👤 {o.username}<br />📅 {o.created_at}<br /><span className="font-semibold">Total:</span> ${o.total_amount}</p>
                       </div>
                       <div className="flex items-center justify-end gap-2">
