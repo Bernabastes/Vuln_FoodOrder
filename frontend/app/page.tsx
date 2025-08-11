@@ -33,7 +33,7 @@ export default async function HomePage() {
             <div key={r.id} className="rounded-2xl overflow-hidden bg-white shadow-sm border">
               <div className="relative h-56 bg-gray-100">
                 {/* Static promos for look-and-feel */}
-                <img src={r.id === 1 ? 'https://images.unsplash.com/photo-1542281286-9e0a16bb7366?q=80&w=1200&auto=format&fit=crop' : 'https://images.unsplash.com/photo-1550547660-d9450f859349?q=80&w=1200&auto=format&fit=crop'} alt="cover" className="h-full w-full object-cover" />
+                <img src={r.logo_path} alt={`${r.name} poster`} className="h-48 w-full object-cover" />
                 <span className={`absolute top-3 left-3 px-3 py-1 rounded-full text-xs font-semibold ${r.id === 1 ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{r.id === 1 ? 'Italian' : 'American'}</span>
               </div>
               <div className="p-5">
