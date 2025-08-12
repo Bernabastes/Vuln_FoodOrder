@@ -13,15 +13,26 @@ export default async function HomePage() {
   return (
     <main className="max-w-6xl mx-auto p-6 space-y-8">
       <section className="grid md:grid-cols-3 gap-6 items-stretch">
-        <div className="md:col-span-2 rounded-2xl shadow relative overflow-hidden p-8" style={{background:"linear-gradient(135deg,#ef4444,#f97316)"}}>
-          <h1 className="text-4xl font-extrabold text-white mb-3">Welcome to VulnEats</h1>
-          <p className="text-orange-50 text-lg">Order delicious food from your favorite restaurants with just a few clicks!</p>
-          <hr className="my-6 opacity-50" />
-          <p className="text-orange-50 mb-6">Discover amazing dishes, place orders, and track your delivery in real-time.</p>
-          <Link href="/restaurants" className="inline-flex items-center gap-2 bg-white/90 text-red-700 hover:bg-white px-4 py-2 rounded">
-            <span>🍽️</span>
-            <span>Browse Restaurants</span>
-          </Link>
+        <div className="md:col-span-2 rounded-2xl shadow relative overflow-hidden p-8">
+          <img
+            src="https://images.unsplash.com/photo-1544025162-d76694265947?q=80&w=1600&auto=format&fit=crop"
+            alt="Food background"
+            className="absolute inset-0 w-full h-full object-cover"
+          />
+          <div
+            className="absolute inset-0"
+            style={{ background: "linear-gradient(135deg, rgba(239,68,68,0.85), rgba(249,115,22,0.85))" }}
+          />
+          <div className="relative z-10">
+            <h1 className="text-4xl font-extrabold text-white mb-3">Welcome to VulnEats</h1>
+            <p className="text-orange-50 text-lg">Order delicious food from your favorite restaurants with just a few clicks!</p>
+            <hr className="my-6 opacity-50" />
+            <p className="text-orange-50 mb-6">Discover amazing dishes, place orders, and track your delivery in real-time.</p>
+            <Link href="/restaurants" className="inline-flex items-center gap-2 bg-white/90 text-red-700 hover:bg-white px-4 py-2 rounded">
+              <span>🍽️</span>
+              <span>Browse Restaurants</span>
+            </Link>
+          </div>
         </div>
         <HomeSidebar />
       </section>

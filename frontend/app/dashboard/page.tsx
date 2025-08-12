@@ -274,14 +274,28 @@ export default function DashboardPage() {
                             }
                           }}
                           disabled={deletingRestaurant === r.id}
-                          className={`ml-3 px-3 py-1 text-sm rounded focus:outline-none focus:ring-2 ${
+                          aria-label="Delete restaurant"
+                          className={`ml-3 inline-flex items-center justify-center rounded-full focus:outline-none focus:ring-2 ${
                             deletingRestaurant === r.id
-                              ? 'bg-gray-400 text-gray-600 cursor-not-allowed'
-                              : 'bg-red-600 text-white hover:bg-red-700 focus:ring-red-500'
+                              ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                              : 'bg-red-50 text-red-600 hover:bg-red-100 focus:ring-red-500'
                           }`}
+                          style={{ width: 36, height: 36 }}
                           title="Delete restaurant"
                         >
-                          {deletingRestaurant === r.id ? '⏳ Deleting...' : '🗑️ Delete'}
+                          {deletingRestaurant === r.id ? (
+                            <span className="animate-pulse">⏳</span>
+                          ) : (
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              viewBox="0 0 24 24"
+                              fill="currentColor"
+                              className="w-5 h-5"
+                              aria-hidden="true"
+                            >
+                              <path fillRule="evenodd" d="M9 3a1 1 0 00-1 1v1H5.5a1 1 0 100 2H6v11a3 3 0 003 3h6a3 3 0 003-3V7h.5a1 1 0 100-2H16V4a1 1 0 00-1-1H9zm2 3V4h2v2h-2zm-2 5a1 1 0 112 0v7a1 1 0 11-2 0v-7zm6-1a1 1 0 00-1 1v7a1 1 0 102 0v-7a1 1 0 00-1-1z" clipRule="evenodd" />
+                            </svg>
+                          )}
                         </button>
                       </div>
                     </div>

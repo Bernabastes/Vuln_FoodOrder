@@ -3,6 +3,7 @@ from flask_cors import CORS
 import sqlite3
 import hashlib
 import os
+import uuid
 from datetime import timedelta
 from werkzeug.utils import secure_filename
 
@@ -27,6 +28,9 @@ class ApiConfig:
     SECRET_KEY = os.environ.get("SECRET_KEY", "vulneats-secret-key-change-in-production")
     PERMANENT_SESSION_LIFETIME = timedelta(hours=24)
     UPLOAD_FOLDER = os.environ.get("UPLOAD_FOLDER", "/app/uploads")
+    CHAPA_SECRET_KEY = os.environ.get("CHAPA_SECRET_KEY")
+    FRONTEND_BASE_URL = os.environ.get("FRONTEND_BASE_URL", "http://localhost:3000")
+    BACKEND_BASE_URL = os.environ.get("BACKEND_BASE_URL", "http://localhost:5001")
 
 
 def create_app() -> Flask:
@@ -55,6 +59,12 @@ def create_app() -> Flask:
 
     use_postgres = bool(ApiConfig.DATABASE_URL and psycopg is not None)
 
+    # Ensure optional dependencies
+    try:
+        import requests  # type: ignore
+    except Exception:
+        requests = None  # type: ignore
+
     class DatabaseConnection:
         def __init__(self, conn, is_postgres: bool):
             self._conn = conn
@@ -68,6 +78,9 @@ def create_app() -> Flask:
 
         def commit(self):
             return self._conn.commit()
+
+        def rollback(self):
+            return self._conn.rollback()
 
         def close(self):
             return self._conn.close()
@@ -95,6 +108,204 @@ def create_app() -> Flask:
             return int(row["id"]) if row else 0
 
     # NOTE: get_db_connection redefined above to support Postgres
+
+    # Ensure payments table exists for Chapa integration (idempotent)
+    def ensure_payments_table():
+        conn = get_db_connection()
+        try:
+            if use_postgres:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS payments (
+                        id SERIAL PRIMARY KEY,
+                        order_id INTEGER NOT NULL REFERENCES orders(id),
+                        provider TEXT NOT NULL,
+                        tx_ref TEXT UNIQUE NOT NULL,
+                        amount REAL NOT NULL,
+                        currency TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                    """
+                )
+            else:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS payments (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        order_id INTEGER NOT NULL,
+                        provider TEXT NOT NULL,
+                        tx_ref TEXT UNIQUE NOT NULL,
+                        amount REAL NOT NULL,
+                        currency TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (order_id) REFERENCES orders (id)
+                    )
+                    """
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    ensure_payments_table()
+
+    # Ensure unified cart schema (single table cart_items keyed by user_id)
+    def ensure_cart_tables():
+        conn = get_db_connection()
+        try:
+            if use_postgres:
+                # Create unified cart_items table if missing
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS cart_items (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER REFERENCES users(id),
+                        menu_item_id INTEGER NOT NULL REFERENCES menu_items(id),
+                        quantity INTEGER NOT NULL,
+                        special_instructions TEXT,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                    """
+                )
+                # Add user_id column if schema is legacy
+                try:
+                    conn.execute("ALTER TABLE cart_items ADD COLUMN IF NOT EXISTS user_id INTEGER")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                # Add restaurant_id column and backfill from menu_items
+                try:
+                    conn.execute("ALTER TABLE cart_items ADD COLUMN IF NOT EXISTS restaurant_id INTEGER")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                try:
+                    conn.execute(
+                        """
+                        UPDATE cart_items ci
+                        SET restaurant_id = mi.restaurant_id
+                        FROM menu_items mi
+                        WHERE ci.restaurant_id IS NULL AND ci.menu_item_id = mi.id
+                        """
+                    )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                # If user_id is null but cart_id exists, backfill from carts
+                try:
+                    conn.execute(
+                        """
+                        UPDATE cart_items ci
+                        SET user_id = c.user_id
+                        FROM carts c
+                        WHERE ci.user_id IS NULL AND ci.cart_id = c.id
+                        """
+                    )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                # Try dropping FK on cart_id if it exists, then drop NOT NULL, then drop the column
+                try:
+                    conn.execute("ALTER TABLE cart_items DROP CONSTRAINT IF EXISTS cart_items_cart_id_fkey")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                try:
+                    conn.execute("ALTER TABLE cart_items ALTER COLUMN cart_id DROP NOT NULL")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                try:
+                    conn.execute("ALTER TABLE cart_items DROP COLUMN IF EXISTS cart_id")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                # Index for quick lookups
+                try:
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_cart_items_user ON cart_items(user_id)")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                try:
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_cart_items_user_rest ON cart_items(user_id, restaurant_id)")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+            else:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS cart_items (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        menu_item_id INTEGER NOT NULL,
+                        quantity INTEGER NOT NULL,
+                        special_instructions TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+                # Add user_id column if legacy schema
+                try:
+                    conn.execute("ALTER TABLE cart_items ADD COLUMN user_id INTEGER")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                # Add restaurant_id and backfill
+                try:
+                    conn.execute("ALTER TABLE cart_items ADD COLUMN restaurant_id INTEGER")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                try:
+                    conn.execute(
+                        """
+                        UPDATE cart_items
+                        SET restaurant_id = (
+                            SELECT restaurant_id FROM menu_items WHERE menu_items.id = cart_items.menu_item_id
+                        )
+                        WHERE restaurant_id IS NULL
+                        """
+                    )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                # Backfill from carts if present
+                try:
+                    conn.execute(
+                        """
+                        UPDATE cart_items
+                        SET user_id = (
+                            SELECT user_id FROM carts WHERE carts.id = cart_items.cart_id
+                        )
+                        WHERE user_id IS NULL
+                        """
+                    )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                # Try to drop the legacy cart_id column
+                try:
+                    conn.execute("ALTER TABLE cart_items DROP COLUMN cart_id")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                try:
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_cart_items_user ON cart_items(user_id)")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                try:
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_cart_items_user_rest ON cart_items(user_id, restaurant_id)")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+            # Final commit
+            conn.commit()
+        finally:
+            conn.close()
+
+    ensure_cart_tables()
 
     def login_required_json(fn):
         def wrapper(*args, **kwargs):
@@ -349,71 +560,302 @@ def create_app() -> Flask:
     @app.post('/api/cart/add')
     @login_required_json
     def api_cart_add():
+        # Ensure cart tables exist (handles fresh DBs)
+        try:
+            ensure_cart_tables()  # type: ignore[name-defined]
+        except Exception:
+            pass
         data = request.get_json() or {}
         menu_item_id = data.get('menu_item_id')
         quantity = int(data.get('quantity', 1))
         special_instructions = data.get('special_instructions', '')
-        if 'cart' not in session:
-            session['cart'] = []
-        session['cart'].append({
-            'menu_item_id': menu_item_id,
-            'quantity': quantity,
-            'special_instructions': special_instructions,
-        })
-        return jsonify({'ok': True})
+        if not menu_item_id:
+            return jsonify({'ok': False, 'message': 'invalid_menu_item'}), 400
+
+        conn = get_db_connection()
+        try:
+            # Find the item's restaurant
+            m = conn.execute('SELECT restaurant_id FROM menu_items WHERE id = ?', (menu_item_id,)).fetchone()
+            if not m:
+                return jsonify({'ok': False, 'message': 'menu_item_not_found'}), 404
+            restaurant_id = m['restaurant_id'] if isinstance(m, dict) else m[0]
+
+            # Find or create user's cart (allow mixing restaurants; keep first restaurant_id for legacy)
+            # Unified schema: directly upsert into cart_items by user_id
+            cart_id = None  # legacy compatibility no longer required
+
+            # Upsert the item quantity in cart_items
+            existing = conn.execute('SELECT id, quantity FROM cart_items WHERE user_id = ? AND menu_item_id = ?', (session['user_id'], menu_item_id)).fetchone()
+            if existing:
+                item_id = existing['id'] if isinstance(existing, dict) else existing[0]
+                prev_qty = int(existing['quantity'] if isinstance(existing, dict) else existing[1])
+                conn.execute('UPDATE cart_items SET quantity = ?, special_instructions = ?, restaurant_id = ? WHERE id = ?', (prev_qty + quantity, special_instructions, restaurant_id, item_id))
+            else:
+                conn.execute('INSERT INTO cart_items (user_id, menu_item_id, quantity, special_instructions, restaurant_id) VALUES (?, ?, ?, ?, ?)', (session['user_id'], menu_item_id, quantity, special_instructions, restaurant_id))
+            conn.commit()
+            return jsonify({'ok': True})
+        finally:
+            conn.close()
 
     @app.get('/api/cart')
     @login_required_json
     def api_cart_view():
-        if 'cart' not in session or not session['cart']:
-            return jsonify({'items': [], 'total': 0})
+        # Ensure cart tables exist (handles fresh DBs)
+        try:
+            ensure_cart_tables()  # type: ignore[name-defined]
+        except Exception:
+            pass
         conn = get_db_connection()
-        cart_items = []
-        total = 0
-        for item in session['cart']:
-            menu_item = conn.execute('SELECT * FROM menu_items WHERE id = ?', (item['menu_item_id'],)).fetchone()
-            if menu_item:
-                item_total = menu_item['price'] * int(item['quantity'])
+        try:
+            rows = conn.execute('''
+                SELECT ci.id as cart_item_id, ci.menu_item_id, ci.quantity, ci.special_instructions, mi.*, r.name as restaurant_name
+                FROM cart_items ci
+                JOIN menu_items mi ON ci.menu_item_id = mi.id
+                JOIN restaurants r ON mi.restaurant_id = r.id
+                WHERE ci.user_id = ?
+            ''', (session['user_id'],)).fetchall()
+            items = []
+            total = 0
+            for r in rows:
+                menu_item = dict(r)
+                menu_item['restaurant_name'] = menu_item.pop('restaurant_name', '')
+                qty = int(menu_item.pop('quantity' if 'quantity' in menu_item else 'ci.quantity', 1))
+                special = menu_item.pop('special_instructions' if 'special_instructions' in menu_item else 'ci.special_instructions', '')
+                item_total = float(menu_item['price']) * qty
                 total += item_total
-                cart_items.append({
-                    'menu_item': dict(menu_item),
-                    'quantity': item['quantity'],
-                    'special_instructions': item['special_instructions'],
+                items.append({
+                    'cart_item_id': menu_item.pop('cart_item_id' if 'cart_item_id' in menu_item else 'ci.cart_item_id', None),
+                    'menu_item': menu_item,
+                    'quantity': qty,
+                    'special_instructions': special,
                     'total': item_total,
                 })
-        conn.close()
-        return jsonify({'items': cart_items, 'total': total})
+            return jsonify({'items': items, 'total': total})
+        finally:
+            conn.close()
+
+    @app.post('/api/cart/remove')
+    @login_required_json
+    def api_cart_remove():
+        # Ensure cart tables exist (handles fresh DBs)
+        try:
+            ensure_cart_tables()  # type: ignore[name-defined]
+        except Exception:
+            pass
+        data = request.get_json() or {}
+        menu_item_id = data.get('menu_item_id')
+        cart_item_id = data.get('cart_item_id')
+        if not menu_item_id and not cart_item_id:
+            return jsonify({'ok': False, 'message': 'missing_identifier'}), 400
+        conn = get_db_connection()
+        try:
+            if cart_item_id:
+                conn.execute('DELETE FROM cart_items WHERE id = ? AND user_id = ?', (cart_item_id, session['user_id']))
+            else:
+                conn.execute('DELETE FROM cart_items WHERE user_id = ? AND menu_item_id = ?', (session['user_id'], menu_item_id))
+            conn.commit()
+            return jsonify({'ok': True})
+        finally:
+            conn.close()
 
     @app.post('/api/orders/place')
     @login_required_json
     def api_place_order():
-        if 'cart' not in session or not session['cart']:
-            return jsonify({'ok': False, 'message': 'empty_cart'}), 400
-        data = request.get_json() or {}
-        restaurant_id = data.get('restaurant_id')
+        # Ensure cart tables exist (handles fresh DBs)
+        try:
+            ensure_cart_tables()  # type: ignore[name-defined]
+        except Exception:
+            pass
+        # DB-backed cart: build order from carts + cart_items; require restaurant_id in payload
         conn = get_db_connection()
-        total = 0
-        for item in session['cart']:
-            menu_item = conn.execute('SELECT * FROM menu_items WHERE id = ?', (item['menu_item_id'],)).fetchone()
-            if menu_item:
-                total += menu_item['price'] * int(item['quantity'])
-        order_id = insert_and_get_id(
-            conn,
-            '''
-            INSERT INTO orders (user_id, restaurant_id, total_amount, status)
-            VALUES (?, ?, ?, ?)
-            ''',
-            (session['user_id'], restaurant_id, total, 'pending')
-        )
-        for item in session['cart']:
-            conn.execute('''
-                INSERT INTO order_items (order_id, menu_item_id, quantity, special_instructions)
+        try:
+            data = request.get_json() or {}
+            target_restaurant_id = data.get('restaurant_id')
+            # Use unified cart: items directly keyed by user_id
+            if not target_restaurant_id:
+                return jsonify({'ok': False, 'message': 'restaurant_required'}), 400
+            rows = conn.execute('''
+                SELECT ci.menu_item_id, ci.quantity, ci.special_instructions
+                FROM cart_items ci JOIN menu_items mi ON ci.menu_item_id = mi.id
+                WHERE ci.user_id = ? AND mi.restaurant_id = ?
+            ''', (session['user_id'], target_restaurant_id)).fetchall()
+            if not rows:
+                return jsonify({'ok': False, 'message': 'empty_cart'}), 400
+            total = 0
+            # compute total
+            for row in rows:
+                menu_item = conn.execute('SELECT price FROM menu_items WHERE id = ?', (row['menu_item_id'] if isinstance(row, dict) else row[0],)).fetchone()
+                if menu_item:
+                    qty = int(row['quantity'] if isinstance(row, dict) else row[1])
+                    total += float(menu_item['price'] if isinstance(menu_item, dict) else menu_item[0]) * qty
+            order_id = insert_and_get_id(
+                conn,
+                '''
+                INSERT INTO orders (user_id, restaurant_id, total_amount, status)
                 VALUES (?, ?, ?, ?)
-            ''', (order_id, item['menu_item_id'], item['quantity'], item['special_instructions']))
-        conn.commit()
-        conn.close()
-        session.pop('cart', None)
-        return jsonify({'ok': True, 'order_id': order_id})
+                ''',
+                (session['user_id'], target_restaurant_id, total, 'pending')
+            )
+            for row in rows:
+                conn.execute('''
+                    INSERT INTO order_items (order_id, menu_item_id, quantity, special_instructions)
+                    VALUES (?, ?, ?, ?)
+                ''', (order_id, row['menu_item_id'] if isinstance(row, dict) else row[0], row['quantity'] if isinstance(row, dict) else row[1], row['special_instructions'] if isinstance(row, dict) else row[2]))
+            # clear only items from that restaurant
+            conn.execute('DELETE FROM cart_items WHERE user_id = ? AND menu_item_id IN (SELECT id FROM menu_items WHERE restaurant_id = ?)', (session['user_id'], target_restaurant_id))
+            conn.commit()
+            return jsonify({'ok': True, 'order_id': order_id})
+        finally:
+            conn.close()
+
+    @app.post('/api/checkout/chapa')
+    @login_required_json
+    def api_checkout_chapa():
+        # Treat missing or placeholder keys as not configured
+        if ApiConfig.CHAPA_SECRET_KEY is None or str(ApiConfig.CHAPA_SECRET_KEY).strip().upper().startswith('REPLACE_WITH_YOUR_CHAPA_SECRET_KEY'):
+            return jsonify({'ok': False, 'message': 'chapa_not_configured'}), 500
+        if requests is None:
+            return jsonify({'ok': False, 'message': 'requests_library_missing'}), 500
+        # Ensure cart tables exist (handles fresh DBs)
+        try:
+            ensure_cart_tables()  # type: ignore[name-defined]
+        except Exception:
+            pass
+        # Build order from DB-backed cart for a specific restaurant
+        conn = get_db_connection()
+        try:
+            data = request.get_json() or {}
+            target_restaurant_id = data.get('restaurant_id')
+            # Use unified cart: items directly keyed by user_id
+            if not target_restaurant_id:
+                return jsonify({'ok': False, 'message': 'restaurant_required'}), 400
+            # Fetch user for email/name
+            user = conn.execute('SELECT username, email FROM users WHERE id = ?', (session['user_id'],)).fetchone()
+            user_email = (user['email'] if user else None) or 'customer@example.com'
+            user_name = (user['username'] if user else 'Customer')
+            first_name = user_name.split(' ')[0]
+            last_name = 'User'
+
+            rows = conn.execute('''
+                SELECT ci.menu_item_id, ci.quantity, ci.special_instructions
+                FROM cart_items ci JOIN menu_items mi ON ci.menu_item_id = mi.id
+                WHERE ci.user_id = ? AND mi.restaurant_id = ?
+            ''', (session['user_id'], target_restaurant_id)).fetchall()
+            if not rows:
+                return jsonify({'ok': False, 'message': 'empty_cart'}), 400
+            total = 0
+            for row in rows:
+                price_row = conn.execute('SELECT price FROM menu_items WHERE id = ?', (row['menu_item_id'] if isinstance(row, dict) else row[0],)).fetchone()
+                if price_row:
+                    qty = int(row['quantity'] if isinstance(row, dict) else row[1])
+                    total += float(price_row['price'] if isinstance(price_row, dict) else price_row[0]) * qty
+            order_id = insert_and_get_id(
+                conn,
+                '''
+                INSERT INTO orders (user_id, restaurant_id, total_amount, status)
+                VALUES (?, ?, ?, ?)
+                ''',
+                (session['user_id'], target_restaurant_id, total, 'pending')
+            )
+            for row in rows:
+                conn.execute('''
+                    INSERT INTO order_items (order_id, menu_item_id, quantity, special_instructions)
+                    VALUES (?, ?, ?, ?)
+                ''', (order_id, row['menu_item_id'] if isinstance(row, dict) else row[0], row['quantity'] if isinstance(row, dict) else row[1], row['special_instructions'] if isinstance(row, dict) else row[2]))
+            # Create payment record
+            tx_ref = f"vulneats-{uuid.uuid4().hex}"
+            conn.execute('''
+                INSERT INTO payments (order_id, provider, tx_ref, amount, currency, status)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (order_id, 'chapa', tx_ref, total, 'ETB', 'initialized'))
+            conn.commit()
+
+            # Initialize Chapa transaction
+            # Chapa recommends string amount with 2 decimals
+            init_payload = {
+                'amount': f"{total:.2f}",
+                'currency': 'ETB',
+                'email': user_email,
+                'first_name': first_name,
+                'last_name': last_name,
+                'tx_ref': tx_ref,
+                'return_url': f"{ApiConfig.FRONTEND_BASE_URL}/dashboard",
+                'callback_url': f"{ApiConfig.BACKEND_BASE_URL}/api/payments/chapa/verify?tx_ref={tx_ref}",
+                'customization': {
+                    'title': 'VulnEats Order',
+                    'description': f'Order {order_id}'
+                }
+            }
+            headers = {
+                'Authorization': f"Bearer {ApiConfig.CHAPA_SECRET_KEY}",
+                'Content-Type': 'application/json',
+            }
+            try:
+                r = requests.post('https://api.chapa.co/v1/transaction/initialize', json=init_payload, headers=headers, timeout=30)
+                data = r.json() if r.headers.get('content-type', '').startswith('application/json') else {}
+            except Exception as e:
+                # Log and surface a stable error response
+                try:
+                    print(f"[Chapa Init Error] tx_ref={tx_ref} error={str(e)}")
+                except Exception:
+                    pass
+                return jsonify({'ok': False, 'message': 'chapa_init_error'}), 502
+
+            if not r.ok or not data.get('status'):
+                try:
+                    print(f"[Chapa Init Failed] tx_ref={tx_ref} status_code={r.status_code} body={data}")
+                except Exception:
+                    pass
+                return jsonify({'ok': False, 'message': 'chapa_init_failed'}), 502
+
+            checkout_url = (data.get('data') or {}).get('checkout_url')
+            if not checkout_url:
+                try:
+                    print(f"[Chapa Init No URL] tx_ref={tx_ref} body={data}")
+                except Exception:
+                    pass
+                return jsonify({'ok': False, 'message': 'chapa_init_no_url'}), 502
+
+            # Clear only items for the restaurant we just checked out
+            conn.execute('DELETE FROM cart_items WHERE user_id = ? AND menu_item_id IN (SELECT id FROM menu_items WHERE restaurant_id = ?)', (session['user_id'], target_restaurant_id))
+            conn.commit()
+
+            return jsonify({'ok': True, 'checkout_url': checkout_url, 'order_id': order_id, 'tx_ref': tx_ref})
+        finally:
+            conn.close()
+
+    @app.get('/api/payments/chapa/verify')
+    def api_chapa_verify():
+        if ApiConfig.CHAPA_SECRET_KEY is None or requests is None:
+            return jsonify({'ok': False}), 500
+        tx_ref = request.args.get('tx_ref')
+        if not tx_ref:
+            return jsonify({'ok': False, 'message': 'missing_tx_ref'}), 400
+
+        headers = {
+            'Authorization': f"Bearer {ApiConfig.CHAPA_SECRET_KEY}",
+        }
+        try:
+            r = requests.get(f'https://api.chapa.co/v1/transaction/verify/{tx_ref}', headers=headers, timeout=30)
+            data = r.json() if r.headers.get('content-type', '').startswith('application/json') else {}
+        except Exception:
+            data = {}
+
+        status_str = 'failed'
+        if data.get('status') == 'success' and (data.get('data') or {}).get('status') == 'success':
+            status_str = 'paid'
+
+        conn = get_db_connection()
+        try:
+            payment = conn.execute('SELECT order_id FROM payments WHERE tx_ref = ?', (tx_ref,)).fetchone()
+            if payment:
+                conn.execute('UPDATE payments SET status = ? WHERE tx_ref = ?', (status_str, tx_ref))
+                # If paid, keep order as pending for kitchen; otherwise, leave as is.
+                conn.commit()
+        finally:
+            conn.close()
+
+        return jsonify({'ok': True, 'payment_status': status_str})
 
     @app.post('/api/order/status')
     @owner_required_json

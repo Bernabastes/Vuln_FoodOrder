@@ -19,13 +19,17 @@ export default function PlaceOrderButton({ restaurantId }: { restaurantId?: numb
           payload.restaurant_id = restaurantId
         }
         if (!payload.restaurant_id) return
-        await fetch(`${base}/api/orders/place`, {
+        const res = await fetch(`${base}/api/checkout/chapa`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify(payload)
         })
-        location.href = '/dashboard'
+        if (!res.ok) return
+        const data = await res.json()
+        if (data?.checkout_url) {
+          location.href = data.checkout_url
+        }
       }}
     >
       Place order

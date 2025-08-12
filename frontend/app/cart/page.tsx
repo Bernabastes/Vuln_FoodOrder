@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers'
 import PlaceOrderButton from '../../components/PlaceOrderButton'
+import RemoveFromCartButton from '../../components/RemoveFromCartButton'
 
 async function fetchCart() {
   let base =
@@ -22,6 +23,16 @@ async function fetchCart() {
 export default async function CartPage() {
   const cart = await fetchCart()
   const restaurantId = cart.items?.[0]?.menu_item?.restaurant_id
+  // Group items by restaurant (include restaurant name)
+  const groups: Record<string, { items: any[]; total: number; name?: string }> = {}
+  for (const it of cart.items || []) {
+    const rid = it.menu_item.restaurant_id
+    const rname = it.menu_item.restaurant_name || `Restaurant #${rid}`
+    if (!groups[rid]) groups[rid] = { items: [], total: 0, name: rname }
+    groups[rid].items.push(it)
+    groups[rid].total += it.total
+    if (!groups[rid].name) groups[rid].name = rname
+  }
 
   return (
     <main className="max-w-4xl mx-auto p-6">
@@ -31,34 +42,44 @@ export default async function CartPage() {
           <p>Your cart is empty.</p>
         ) : (
           <>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left border-b">
-                  <th className="py-2">Item</th>
-                  <th className="py-2">Qty</th>
-                  <th className="py-2">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {cart.items.map((ci: any, idx: number) => (
-                  <tr key={idx} className="border-b">
-                    <td className="py-2">{ci.menu_item.name}</td>
-                    <td className="py-2">{ci.quantity}</td>
-                    <td className="py-2">${ci.total}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td></td>
-                  <td className="py-2 font-semibold text-right">Grand Total</td>
-                  <td className="py-2 font-semibold">${cart.total}</td>
-                </tr>
-              </tfoot>
-            </table>
-            <div className="text-right mt-4">
-              <PlaceOrderButton restaurantId={restaurantId} />
-            </div>
+            {Object.entries(groups).map(([rid, g]: any, i) => (
+              <div key={rid} className="mb-8">
+                <h2 className="text-lg font-semibold mb-2">{g.name || `Restaurant #${rid}`}</h2>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left border-b">
+                      <th className="py-2">Item</th>
+                      <th className="py-2">Qty</th>
+                      <th className="py-2">Total</th>
+                      <th className="py-2 text-right">Remove</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {g.items.map((ci: any, idx: number) => (
+                      <tr key={idx} className="border-b">
+                        <td className="py-2">{ci.menu_item.name}</td>
+                        <td className="py-2">{ci.quantity}</td>
+                        <td className="py-2">${ci.total}</td>
+                        <td className="py-2 text-right">
+                          <RemoveFromCartButton cartItemId={ci.cart_item_id} menuItemId={ci.menu_item.id} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td></td>
+                      <td className="py-2 font-semibold text-right">Subtotal</td>
+                      <td className="py-2 font-semibold">${g.total}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+                <div className="text-right mt-4">
+                  <PlaceOrderButton restaurantId={Number(rid)} />
+                </div>
+              </div>
+            ))}
+            <div className="text-right mt-6 text-sm text-gray-600">Grand Total: ${cart.total}</div>
           </>
         )}
       </div>
