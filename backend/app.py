@@ -307,6 +307,69 @@ def create_app() -> Flask:
 
     ensure_cart_tables()
 
+    # --------------------
+    # Helpers
+    # --------------------
+    def clamp_quantity(value) -> int:
+        try:
+            q = int(value)
+        except Exception:
+            q = 1
+        if q < 1:
+            q = 1
+        if q > 50:
+            q = 50
+        return q
+
+    def sanitize_special_instructions(text: str) -> str:
+        if not isinstance(text, str):
+            return ''
+        text = text.strip()
+        if len(text) > 500:
+            text = text[:500]
+        return text
+
+    def build_order_for_restaurant(conn: DatabaseConnection, user_id: int, restaurant_id: int):
+        rows = conn.execute('''
+            SELECT ci.menu_item_id, ci.quantity, ci.special_instructions
+            FROM cart_items ci JOIN menu_items mi ON ci.menu_item_id = mi.id
+            WHERE ci.user_id = ? AND mi.restaurant_id = ?
+        ''', (user_id, restaurant_id)).fetchall()
+        if not rows:
+            return None
+        total = 0.0
+        for row in rows:
+            mid = row['menu_item_id'] if isinstance(row, dict) else row[0]
+            qty = int(row['quantity'] if isinstance(row, dict) else row[1])
+            price_row = conn.execute('SELECT price FROM menu_items WHERE id = ?', (mid,)).fetchone()
+            if price_row:
+                price = float(price_row['price'] if isinstance(price_row, dict) else price_row[0])
+                total += price * qty
+        order_id = insert_and_get_id(
+            conn,
+            '''
+            INSERT INTO orders (user_id, restaurant_id, total_amount, status)
+            VALUES (?, ?, ?, ?)
+            ''',
+            (user_id, restaurant_id, total, 'pending')
+        )
+        for row in rows:
+            conn.execute('''
+                INSERT INTO order_items (order_id, menu_item_id, quantity, special_instructions)
+                VALUES (?, ?, ?, ?)
+            ''', (
+                order_id,
+                row['menu_item_id'] if isinstance(row, dict) else row[0],
+                row['quantity'] if isinstance(row, dict) else row[1],
+                row['special_instructions'] if isinstance(row, dict) else row[2]
+            ))
+        conn.execute(
+            'DELETE FROM cart_items WHERE user_id = ? AND menu_item_id IN (SELECT id FROM menu_items WHERE restaurant_id = ?)',
+            (user_id, restaurant_id)
+        )
+        conn.commit()
+        return {'order_id': order_id, 'total': total, 'currency': 'ETB'}
+
     def login_required_json(fn):
         def wrapper(*args, **kwargs):
             if "user_id" not in session:
@@ -560,15 +623,10 @@ def create_app() -> Flask:
     @app.post('/api/cart/add')
     @login_required_json
     def api_cart_add():
-        # Ensure cart tables exist (handles fresh DBs)
-        try:
-            ensure_cart_tables()  # type: ignore[name-defined]
-        except Exception:
-            pass
         data = request.get_json() or {}
         menu_item_id = data.get('menu_item_id')
-        quantity = int(data.get('quantity', 1))
-        special_instructions = data.get('special_instructions', '')
+        quantity = clamp_quantity(data.get('quantity', 1))
+        special_instructions = sanitize_special_instructions(data.get('special_instructions', ''))
         if not menu_item_id:
             return jsonify({'ok': False, 'message': 'invalid_menu_item'}), 400
 
@@ -600,11 +658,6 @@ def create_app() -> Flask:
     @app.get('/api/cart')
     @login_required_json
     def api_cart_view():
-        # Ensure cart tables exist (handles fresh DBs)
-        try:
-            ensure_cart_tables()  # type: ignore[name-defined]
-        except Exception:
-            pass
         conn = get_db_connection()
         try:
             rows = conn.execute('''
@@ -637,11 +690,6 @@ def create_app() -> Flask:
     @app.post('/api/cart/remove')
     @login_required_json
     def api_cart_remove():
-        # Ensure cart tables exist (handles fresh DBs)
-        try:
-            ensure_cart_tables()  # type: ignore[name-defined]
-        except Exception:
-            pass
         data = request.get_json() or {}
         menu_item_id = data.get('menu_item_id')
         cart_item_id = data.get('cart_item_id')
@@ -661,12 +709,7 @@ def create_app() -> Flask:
     @app.post('/api/orders/place')
     @login_required_json
     def api_place_order():
-        # Ensure cart tables exist (handles fresh DBs)
-        try:
-            ensure_cart_tables()  # type: ignore[name-defined]
-        except Exception:
-            pass
-        # DB-backed cart: build order from carts + cart_items; require restaurant_id in payload
+        # DB-backed cart: build order from cart_items; require restaurant_id in payload
         conn = get_db_connection()
         try:
             data = request.get_json() or {}
@@ -674,61 +717,74 @@ def create_app() -> Flask:
             # Use unified cart: items directly keyed by user_id
             if not target_restaurant_id:
                 return jsonify({'ok': False, 'message': 'restaurant_required'}), 400
-            rows = conn.execute('''
-                SELECT ci.menu_item_id, ci.quantity, ci.special_instructions
-                FROM cart_items ci JOIN menu_items mi ON ci.menu_item_id = mi.id
-                WHERE ci.user_id = ? AND mi.restaurant_id = ?
-            ''', (session['user_id'], target_restaurant_id)).fetchall()
-            if not rows:
+            result = build_order_for_restaurant(conn, session['user_id'], int(target_restaurant_id))
+            if not result:
                 return jsonify({'ok': False, 'message': 'empty_cart'}), 400
-            total = 0
-            # compute total
-            for row in rows:
-                menu_item = conn.execute('SELECT price FROM menu_items WHERE id = ?', (row['menu_item_id'] if isinstance(row, dict) else row[0],)).fetchone()
-                if menu_item:
-                    qty = int(row['quantity'] if isinstance(row, dict) else row[1])
-                    total += float(menu_item['price'] if isinstance(menu_item, dict) else menu_item[0]) * qty
-            order_id = insert_and_get_id(
-                conn,
-                '''
-                INSERT INTO orders (user_id, restaurant_id, total_amount, status)
-                VALUES (?, ?, ?, ?)
-                ''',
-                (session['user_id'], target_restaurant_id, total, 'pending')
-            )
-            for row in rows:
-                conn.execute('''
-                    INSERT INTO order_items (order_id, menu_item_id, quantity, special_instructions)
-                    VALUES (?, ?, ?, ?)
-                ''', (order_id, row['menu_item_id'] if isinstance(row, dict) else row[0], row['quantity'] if isinstance(row, dict) else row[1], row['special_instructions'] if isinstance(row, dict) else row[2]))
-            # clear only items from that restaurant
-            conn.execute('DELETE FROM cart_items WHERE user_id = ? AND menu_item_id IN (SELECT id FROM menu_items WHERE restaurant_id = ?)', (session['user_id'], target_restaurant_id))
-            conn.commit()
-            return jsonify({'ok': True, 'order_id': order_id})
+            return jsonify({'ok': True, **result})
         finally:
             conn.close()
 
-    @app.post('/api/checkout/chapa')
+    @app.post('/api/orders/batch')
     @login_required_json
-    def api_checkout_chapa():
+    def api_place_orders_batch():
+        conn = get_db_connection()
+        try:
+            # Find all distinct restaurants present in user's cart
+            rows = conn.execute('''
+                SELECT DISTINCT mi.restaurant_id
+                FROM cart_items ci
+                JOIN menu_items mi ON ci.menu_item_id = mi.id
+                WHERE ci.user_id = ?
+            ''', (session['user_id'],)).fetchall()
+            restaurant_ids = [int(r['restaurant_id'] if isinstance(r, dict) else r[0]) for r in rows]
+            if not restaurant_ids:
+                return jsonify({'ok': False, 'message': 'empty_cart'}), 400
+            created = []
+            for rid in restaurant_ids:
+                res = build_order_for_restaurant(conn, session['user_id'], rid)
+                if res:
+                    created.append({'restaurant_id': rid, **res})
+            return jsonify({'ok': True, 'orders': created})
+        finally:
+            conn.close()
+
+    # Professional order creation endpoint (idempotent with cart content)
+    @app.post('/api/orders')
+    @login_required_json
+    def api_create_order():
+        data = request.get_json() or {}
+        target_restaurant_id = data.get('restaurant_id')
+        if not target_restaurant_id:
+            return jsonify({'ok': False, 'message': 'restaurant_required'}), 400
+        conn = get_db_connection()
+        try:
+            result = build_order_for_restaurant(conn, session['user_id'], int(target_restaurant_id))
+            if not result:
+                return jsonify({'ok': False, 'message': 'empty_cart'}), 400
+            return jsonify({'ok': True, **result})
+        finally:
+            conn.close()
+
+    @app.post('/api/payments/chapa/checkout')
+    @login_required_json
+    def api_payments_chapa_checkout():
         # Treat missing or placeholder keys as not configured
         if ApiConfig.CHAPA_SECRET_KEY is None or str(ApiConfig.CHAPA_SECRET_KEY).strip().upper().startswith('REPLACE_WITH_YOUR_CHAPA_SECRET_KEY'):
             return jsonify({'ok': False, 'message': 'chapa_not_configured'}), 500
         if requests is None:
             return jsonify({'ok': False, 'message': 'requests_library_missing'}), 500
-        # Ensure cart tables exist (handles fresh DBs)
-        try:
-            ensure_cart_tables()  # type: ignore[name-defined]
-        except Exception:
-            pass
-        # Build order from DB-backed cart for a specific restaurant
         conn = get_db_connection()
         try:
             data = request.get_json() or {}
-            target_restaurant_id = data.get('restaurant_id')
-            # Use unified cart: items directly keyed by user_id
-            if not target_restaurant_id:
-                return jsonify({'ok': False, 'message': 'restaurant_required'}), 400
+            order_id = data.get('order_id')
+            restaurant_id = data.get('restaurant_id')
+            if not order_id and not restaurant_id:
+                return jsonify({'ok': False, 'message': 'order_id_or_restaurant_required'}), 400
+            if not order_id and restaurant_id:
+                created = build_order_for_restaurant(conn, session['user_id'], int(restaurant_id))
+                if not created:
+                    return jsonify({'ok': False, 'message': 'empty_cart'}), 400
+                order_id = created['order_id']
             # Fetch user for email/name
             user = conn.execute('SELECT username, email FROM users WHERE id = ?', (session['user_id'],)).fetchone()
             user_email = (user['email'] if user else None) or 'customer@example.com'
@@ -736,32 +792,13 @@ def create_app() -> Flask:
             first_name = user_name.split(' ')[0]
             last_name = 'User'
 
-            rows = conn.execute('''
-                SELECT ci.menu_item_id, ci.quantity, ci.special_instructions
-                FROM cart_items ci JOIN menu_items mi ON ci.menu_item_id = mi.id
-                WHERE ci.user_id = ? AND mi.restaurant_id = ?
-            ''', (session['user_id'], target_restaurant_id)).fetchall()
-            if not rows:
-                return jsonify({'ok': False, 'message': 'empty_cart'}), 400
-            total = 0
-            for row in rows:
-                price_row = conn.execute('SELECT price FROM menu_items WHERE id = ?', (row['menu_item_id'] if isinstance(row, dict) else row[0],)).fetchone()
-                if price_row:
-                    qty = int(row['quantity'] if isinstance(row, dict) else row[1])
-                    total += float(price_row['price'] if isinstance(price_row, dict) else price_row[0]) * qty
-            order_id = insert_and_get_id(
-                conn,
-                '''
-                INSERT INTO orders (user_id, restaurant_id, total_amount, status)
-                VALUES (?, ?, ?, ?)
-                ''',
-                (session['user_id'], target_restaurant_id, total, 'pending')
-            )
-            for row in rows:
-                conn.execute('''
-                    INSERT INTO order_items (order_id, menu_item_id, quantity, special_instructions)
-                    VALUES (?, ?, ?, ?)
-                ''', (order_id, row['menu_item_id'] if isinstance(row, dict) else row[0], row['quantity'] if isinstance(row, dict) else row[1], row['special_instructions'] if isinstance(row, dict) else row[2]))
+            order = conn.execute('SELECT user_id, total_amount FROM orders WHERE id = ?', (order_id,)).fetchone()
+            if not order:
+                return jsonify({'ok': False, 'message': 'order_not_found'}), 404
+            oid_user_id = order['user_id'] if isinstance(order, dict) else order[0]
+            if int(oid_user_id) != int(session['user_id']):
+                return jsonify({'ok': False, 'message': 'forbidden'}), 403
+            total = float(order['total_amount'] if isinstance(order, dict) else order[1])
             # Create payment record
             tx_ref = f"vulneats-{uuid.uuid4().hex}"
             conn.execute('''
@@ -779,7 +816,7 @@ def create_app() -> Flask:
                 'first_name': first_name,
                 'last_name': last_name,
                 'tx_ref': tx_ref,
-                'return_url': f"{ApiConfig.FRONTEND_BASE_URL}/dashboard",
+                'return_url': f"{ApiConfig.FRONTEND_BASE_URL}/dashboard?tx_ref={tx_ref}",
                 'callback_url': f"{ApiConfig.BACKEND_BASE_URL}/api/payments/chapa/verify?tx_ref={tx_ref}",
                 'customization': {
                     'title': 'VulnEats Order',
@@ -816,11 +853,87 @@ def create_app() -> Flask:
                     pass
                 return jsonify({'ok': False, 'message': 'chapa_init_no_url'}), 502
 
-            # Clear only items for the restaurant we just checked out
-            conn.execute('DELETE FROM cart_items WHERE user_id = ? AND menu_item_id IN (SELECT id FROM menu_items WHERE restaurant_id = ?)', (session['user_id'], target_restaurant_id))
+            return jsonify({'ok': True, 'checkout_url': checkout_url, 'order_id': order_id, 'tx_ref': tx_ref})
+        finally:
+            conn.close()
+
+    @app.post('/api/payments/chapa/checkout/batch')
+    @login_required_json
+    def api_payments_chapa_checkout_batch():
+        # Ensure keys and requests lib
+        if ApiConfig.CHAPA_SECRET_KEY is None:
+            return jsonify({'ok': False, 'message': 'chapa_not_configured'}), 500
+        try:
+            import requests as _rq  # type: ignore
+        except Exception:
+            return jsonify({'ok': False, 'message': 'requests_library_missing'}), 500
+
+        conn = get_db_connection()
+        try:
+            # Collect restaurant IDs from cart
+            rid_rows = conn.execute('''
+                SELECT DISTINCT mi.restaurant_id
+                FROM cart_items ci
+                JOIN menu_items mi ON ci.menu_item_id = mi.id
+                WHERE ci.user_id = ?
+            ''', (session['user_id'],)).fetchall()
+            restaurant_ids = [int(r['restaurant_id'] if isinstance(r, dict) else r[0]) for r in rid_rows]
+            if not restaurant_ids:
+                return jsonify({'ok': False, 'message': 'empty_cart'}), 400
+
+            # Fetch user for email/name
+            user = conn.execute('SELECT username, email FROM users WHERE id = ?', (session['user_id'],)).fetchone()
+            user_email = (user['email'] if user else None) or 'customer@example.com'
+            user_name = (user['username'] if user else 'Customer')
+            first_name = user_name.split(' ')[0]
+            last_name = 'User'
+
+            headers = {
+                'Authorization': f"Bearer {ApiConfig.CHAPA_SECRET_KEY}",
+                'Content-Type': 'application/json',
+            }
+
+            payments = []
+            failures = []
+            for rid in restaurant_ids:
+                created = build_order_for_restaurant(conn, session['user_id'], rid)
+                if not created:
+                    continue
+                order_id = created['order_id']
+                total = float(created['total'])
+                tx_ref = f"vulneats-{uuid.uuid4().hex}"
+                conn.execute('''
+                    INSERT INTO payments (order_id, provider, tx_ref, amount, currency, status)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (order_id, 'chapa', tx_ref, total, 'ETB', 'initialized'))
             conn.commit()
 
-            return jsonify({'ok': True, 'checkout_url': checkout_url, 'order_id': order_id, 'tx_ref': tx_ref})
+            init_payload = {
+                'amount': f"{total:.2f}",
+                'currency': 'ETB',
+                'email': user_email,
+                'first_name': first_name,
+                'last_name': last_name,
+                'tx_ref': tx_ref,
+                'return_url': f"{ApiConfig.FRONTEND_BASE_URL}/dashboard?tx_ref={tx_ref}",
+                'callback_url': f"{ApiConfig.BACKEND_BASE_URL}/api/payments/chapa/verify?tx_ref={tx_ref}",
+                'customization': {
+                    'title': 'VulnEats Order',
+                    'description': f'Order {order_id}'
+                }
+            }
+            try:
+                r = _rq.post('https://api.chapa.co/v1/transaction/initialize', json=init_payload, headers=headers, timeout=30)
+                data = r.json() if r.headers.get('content-type', '').startswith('application/json') else {}
+                checkout_url = (data.get('data') or {}).get('checkout_url') if r.ok else None
+                if checkout_url:
+                    payments.append({'order_id': order_id, 'tx_ref': tx_ref, 'checkout_url': checkout_url})
+                else:
+                    failures.append({'order_id': order_id, 'tx_ref': tx_ref})
+            except Exception:
+                failures.append({'order_id': order_id, 'tx_ref': tx_ref})
+
+            return jsonify({'ok': True, 'payments': payments, 'failed': failures})
         finally:
             conn.close()
 

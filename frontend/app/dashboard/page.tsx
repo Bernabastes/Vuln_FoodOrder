@@ -19,6 +19,22 @@ export default function DashboardPage() {
   const formRef = useRef<HTMLFormElement>(null)
 
   useEffect(() => {
+    // If coming back from Chapa, verify tx_ref to update payment status
+    const verifyIfNeeded = async () => {
+      try {
+        const url = new URL(window.location.href)
+        const txRef = url.searchParams.get('tx_ref')
+        if (txRef) {
+          const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
+          await fetch(`${base}/api/payments/chapa/verify?tx_ref=${encodeURIComponent(txRef)}`)
+          // Remove tx_ref from URL to avoid repeat
+          url.searchParams.delete('tx_ref')
+          window.history.replaceState({}, '', url.toString())
+        }
+      } catch {}
+    }
+    verifyIfNeeded()
+
     const load = async () => {
       const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
       try {

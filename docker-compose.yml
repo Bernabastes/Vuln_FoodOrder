@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   backend:
     build:
@@ -9,19 +7,22 @@ services:
       - "5001:5001"
     volumes:
       - ./uploads:/app/uploads
+    env_file:
+      - .env
     environment:
       FLASK_ENV: development
       FLASK_DEBUG: "1"
-      DATABASE_PATH: /app/vulneats.db
-      UPLOAD_FOLDER: /app/uploads
-      DATABASE_URL: "postgresql://neondb_owner:npg_75xImXtNePLH@ep-holy-haze-a1c2ms4i-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
-      CLOUDINARY_CLOUD_NAME: dpkakpm7v
-      CLOUDINARY_API_KEY: "623281826869567"
-      CLOUDINARY_API_SECRET: "U_VxEoVJQ97t40qVMNkia86H8ks"
-      CHAPA_SECRET_KEY: "CHASECK_TEST-TyIwMyauLsl9IhMWfjoMejU42zctQAjp"
-      CHAPA_PUBLIC_KEY: "CHAPUBK_TEST-aSCN2NddvA19eOimA55zWnwDnDm1F3Bz"
-      FRONTEND_BASE_URL: "http://localhost:3000"
-      BACKEND_BASE_URL: "http://localhost:5001"
+      SECRET_KEY: ${SECRET_KEY}
+      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_PATH: ${DATABASE_PATH}
+      UPLOAD_FOLDER: ${UPLOAD_FOLDER}
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET}
+      CHAPA_SECRET_KEY: ${CHAPA_SECRET_KEY}
+      CHAPA_PUBLIC_KEY: ${CHAPA_PUBLIC_KEY}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL}
+      BACKEND_BASE_URL: ${BACKEND_BASE_URL}
     restart: unless-stopped
     command: python backend/app.py
 
