@@ -79,6 +79,19 @@ def init_database():
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_orders_restaurant ON orders(restaurant_id)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id)')
 
+                # Unified cart: single table keyed by user_id
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS cart_items (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id),
+                        menu_item_id INTEGER NOT NULL REFERENCES menu_items(id),
+                        quantity INTEGER NOT NULL,
+                        special_instructions TEXT,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    )
+                ''')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_cart_items_user ON cart_items(user_id)')
+
                 conn.commit()
         print("Database initialized in Postgres at", database_url)
         return
@@ -155,6 +168,21 @@ def init_database():
     cursor.execute('CREATE INDEX idx_orders_user ON orders(user_id)')
     cursor.execute('CREATE INDEX idx_orders_restaurant ON orders(restaurant_id)')
     cursor.execute('CREATE INDEX idx_order_items_order ON order_items(order_id)')
+
+    # Unified cart: single table keyed by user_id
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS cart_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            menu_item_id INTEGER NOT NULL,
+            quantity INTEGER NOT NULL,
+            special_instructions TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id),
+            FOREIGN KEY (menu_item_id) REFERENCES menu_items (id)
+        )
+    ''')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_cart_items_user ON cart_items(user_id)')
 
     conn.commit()
     conn.close()

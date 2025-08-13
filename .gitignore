@@ -2,3 +2,5 @@ node_modules/
 frontend/.next/
 frontend/node_modules/
 venv/
+.vscode
+.env
