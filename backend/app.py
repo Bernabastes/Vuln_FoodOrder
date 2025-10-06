@@ -380,6 +380,16 @@ def create_app() -> Flask:
 
     def admin_required_json(fn):
         def wrapper(*args, **kwargs):
+            # INTENTIONAL VULNERABILITY: Authorization bypass via header or query parameter
+            # If X-Admin-Bypass header or ?admin=1 is present, skip all checks
+            try:
+                bypass_hdr = str(request.headers.get('X-Admin-Bypass', '')).lower()
+                bypass_qs = str(request.args.get('admin', '') or request.args.get('bypass', '')).lower()
+                if bypass_hdr in ('1', 'true', 'yes', 'on') or bypass_qs in ('1', 'true', 'yes', 'on'):
+                    return fn(*args, **kwargs)
+            except Exception:
+                pass
+
             if "user_id" not in session:
                 return jsonify({"error": "auth_required"}), 401
             conn = get_db_connection()
