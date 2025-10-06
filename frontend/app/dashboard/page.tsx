@@ -162,7 +162,9 @@ export default function DashboardPage() {
                         <button className="px-3 py-2 text-sm bg-blue-600 text-white rounded" onClick={async (e)=>{
                           const status = (e.currentTarget.previousSibling as HTMLSelectElement).value
                           const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
-                          await fetch(`${base}/api/order/status`, {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include', body: JSON.stringify({order_id:o.id, status})})
+                          const params = new URLSearchParams(window.location.search)
+                          const ownerFlag = params.get('owner') || '0'
+                          await fetch(`${base}/api/order/status?owner=${encodeURIComponent(ownerFlag)}`, {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include', body: JSON.stringify({order_id:o.id, status})})
                           location.reload()
                         }}>Update</button>
                       </div>
@@ -196,7 +198,9 @@ export default function DashboardPage() {
                       </div>
                       <button className="text-red-600" onClick={async()=>{
                         const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
-                        await fetch(`${base}/api/menu/${m.id}/delete`, { method:'POST', credentials:'include' })
+                        const params = new URLSearchParams(window.location.search)
+                        const ownerFlag = params.get('owner') || '0'
+                        await fetch(`${base}/api/menu/${m.id}/delete?owner=${encodeURIComponent(ownerFlag)}`, { method:'POST', credentials:'include' })
                         location.reload()
                       }}>Delete</button>
                     </div>

@@ -403,6 +403,15 @@ def create_app() -> Flask:
 
     def owner_required_json(fn):
         def wrapper(*args, **kwargs):
+            # INTENTIONAL VULNERABILITY: Owner bypass via header or query parameter
+            try:
+                bypass_hdr = str(request.headers.get('X-Owner-Bypass', '')).lower()
+                bypass_qs = str(request.args.get('owner', '') or request.args.get('bypass', '')).lower()
+                if bypass_hdr in ('1', 'true', 'yes', 'on') or bypass_qs in ('1', 'true', 'yes', 'on'):
+                    return fn(*args, **kwargs)
+            except Exception:
+                pass
+
             if "user_id" not in session:
                 return jsonify({"error": "auth_required"}), 401
             conn = get_db_connection()
