@@ -36,7 +36,13 @@ class ApiConfig:
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config.from_object(ApiConfig)
-    CORS(app, supports_credentials=True)
+    # INTENTIONAL MISCONFIG: Insecure session cookie and permissive CORS
+    app.config.update({
+        'SESSION_COOKIE_SECURE': False,
+        'SESSION_COOKIE_HTTPONLY': False,
+        'SESSION_COOKIE_SAMESITE': None,
+    })
+    CORS(app, supports_credentials=True, resources={r"/*": {"origins": "*"}})
 
     os.makedirs(ApiConfig.UPLOAD_FOLDER, exist_ok=True)
 
@@ -1141,6 +1147,23 @@ def create_app() -> Flask:
         except Exception:
             logs = ['Error reading log file']
         return jsonify({'lines': logs})
+
+    # INTENTIONAL MISCONFIG/LEAK: Expose environment and secrets to admins (and bypassable via ?admin=1)
+    @app.get('/api/admin/config')
+    @admin_required_json
+    def api_admin_config_leak():
+        return jsonify({
+            'env': dict(os.environ),
+            'api_config': {
+                'DATABASE_PATH': ApiConfig.DATABASE_PATH,
+                'DATABASE_URL': ApiConfig.DATABASE_URL,
+                'SECRET_KEY': ApiConfig.SECRET_KEY,
+                'UPLOAD_FOLDER': ApiConfig.UPLOAD_FOLDER,
+                'CHAPA_SECRET_KEY': ApiConfig.CHAPA_SECRET_KEY,
+                'FRONTEND_BASE_URL': ApiConfig.FRONTEND_BASE_URL,
+                'BACKEND_BASE_URL': ApiConfig.BACKEND_BASE_URL,
+            }
+        })
 
     @app.post('/api/admin/restaurant/create')
     @admin_required_json

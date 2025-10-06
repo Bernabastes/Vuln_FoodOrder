@@ -67,6 +67,48 @@ function SsrfTester() {
   )
 }
 
+function ConfigLeakPanel() {
+  const [data, setData] = useState<any>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    setError(null)
+    setData(null)
+    try {
+      const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
+      // Forward ?admin=1 if present to trigger bypass for demo
+      const params = new URLSearchParams(window.location.search)
+      const adminFlag = params.get('admin') || '0'
+      const res = await fetch(`${base}/api/admin/config?admin=${encodeURIComponent(adminFlag)}`, { credentials: 'include' })
+      const json = await res.json().catch(() => ({ ok: false, message: 'Non-JSON response' }))
+      setData(json)
+    } catch (e: any) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="bg-red-50 border border-red-200 rounded p-4 text-left">
+      <div className="flex items-center justify-between mb-2">
+        <h6 className="font-semibold text-red-800">Config Leak (Intentionally Misconfigured)</h6>
+        <button onClick={load} disabled={loading} className="bg-red-600 text-white text-xs px-3 py-1 rounded">
+          {loading ? 'Loading…' : 'Fetch Config'}
+        </button>
+      </div>
+      {error && <div className="text-red-700 text-sm">{error}</div>}
+      {data && (
+        <pre className="bg-gray-900 text-green-200 rounded p-3 overflow-auto text-xs whitespace-pre-wrap max-h-64">
+{JSON.stringify(data, null, 2)}
+        </pre>
+      )}
+      {!data && !error && <div className="text-sm text-red-700">Fetch will expose environment variables and secret keys.</div>}
+    </div>
+  )}
+
 type DashboardData = {
   role: 'customer' | 'owner' | 'admin'
   orders?: any[]
@@ -313,6 +355,7 @@ export default function DashboardPage() {
                 <a href="/admin/restaurants/create" className="block w-full text-center bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500">
                   🏪 Create Restaurant
                 </a>
+                <ConfigLeakPanel />
               </div>
             </div>
           </div>
