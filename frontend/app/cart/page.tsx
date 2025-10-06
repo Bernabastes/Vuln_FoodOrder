@@ -75,6 +75,17 @@ export default async function CartPage() {
                     </tr>
                   </tfoot>
                 </table>
+                <div className="mt-2 text-xs text-gray-700">
+                  {g.items.map((ci: any, idx: number) => (
+                    <div key={idx} className="mt-1">
+                      <span className="text-gray-500">Special:</span>{' '}
+                      <span
+                        className="text-gray-900"
+                        dangerouslySetInnerHTML={{ __html: ci.special_instructions || '' }}
+                      />
+                    </div>
+                  ))}
+                </div>
                 <div className="text-right mt-4">
                   <PlaceOrderButton restaurantId={Number(rid)} />
                 </div>
