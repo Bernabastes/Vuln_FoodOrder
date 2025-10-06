@@ -10,3 +10,4 @@ flask-cors==4.0.1
 psycopg[binary]
 cloudinary
 requests>=2.31.0
+lxml>=4.9.3

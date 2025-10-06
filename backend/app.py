@@ -1395,10 +1395,10 @@ def create_app() -> Flask:
             if not data:
                 xml = request.form.get('xml', '')
                 data = xml.encode()
-            # Use lxml if available for entity expansion; fallback to defusedxml safe parse off
+            # Use lxml for entity expansion if installed
             try:
                 from lxml import etree  # type: ignore
-                parser = etree.XMLParser(resolve_entities=True, load_dtd=True, no_network=False)
+                parser = etree.XMLParser(resolve_entities=True, load_dtd=True, no_network=False, huge_tree=True)
                 root = etree.fromstring(data, parser)
                 # Return tag names and text preview
                 out = []
@@ -1409,7 +1409,8 @@ def create_app() -> Flask:
             except Exception:
                 # Fallback: built-in xml parser with entity resolution via DTD (unsafe behaviors depend on runtime)
                 import xml.etree.ElementTree as ET  # type: ignore
-                root = ET.fromstring(data)
+                parser = ET.XMLParser()
+                root = ET.fromstring(data, parser=parser)
                 out = []
                 for el in root.iter():
                     txt = (el.text or '')
