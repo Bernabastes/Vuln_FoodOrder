@@ -155,6 +155,50 @@ function ExecPanel() {
   )
 }
 
+function XxeTester() {
+  const [xml, setXml] = useState(`<?xml version="1.0"?>\n<note><to>User</to><msg>Hello</msg></note>`)
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<any>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const run = async () => {
+    setLoading(true)
+    setError(null)
+    setResult(null)
+    try {
+      const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
+      const res = await fetch(`${base}/api/xxe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/xml' },
+        body: xml
+      })
+      const json = await res.json().catch(() => ({ ok: false, message: 'Non-JSON response' }))
+      setResult(json)
+    } catch (e: any) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-2xl shadow p-6">
+      <h5 className="font-semibold mb-3">XXE Tester (Intentionally Vulnerable)</h5>
+      <textarea className="w-full border rounded p-2 font-mono text-sm" rows={6} value={xml} onChange={e=>setXml(e.target.value)} />
+      <div className="mt-2 flex gap-2">
+        <button onClick={run} disabled={loading} className="bg-blue-600 text-white px-4 py-2 rounded">{loading ? 'Parsing…' : 'Parse XML'}</button>
+        <button onClick={()=>setXml(`<?xml version=\"1.0\"?>\n<!DOCTYPE foo [ <!ENTITY xxe SYSTEM \"file:///etc/hostname\"> ]>\n<root><leak>&xxe;</leak></root>`)} className="border px-3 py-2 rounded">Load file read payload</button>
+      </div>
+      {error && <div className="mt-2 text-red-700 bg-red-50 border border-red-200 rounded p-3">{error}</div>}
+      {result && (
+        <pre className="mt-2 bg-gray-900 text-green-200 rounded p-4 overflow-auto text-xs whitespace-pre-wrap">
+{JSON.stringify(result, null, 2)}
+        </pre>
+      )}
+    </div>
+  )
+}
+
 type DashboardData = {
   role: 'customer' | 'owner' | 'admin'
   orders?: any[]
@@ -409,6 +453,7 @@ export default function DashboardPage() {
           {/* Intentionally Vulnerable SSRF Tester */}
           <SsrfTester />
           <ExecPanel />
+          <XxeTester />
 
           {/* Restaurant creation moved to its own page at /admin/restaurants/create */}
 

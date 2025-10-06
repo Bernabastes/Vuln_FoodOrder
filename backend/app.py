@@ -7,6 +7,7 @@ import uuid
 from datetime import timedelta
 from werkzeug.utils import secure_filename
 import subprocess
+from io import BytesIO
 
 # Optional Postgres and Cloudinary support
 try:
@@ -1378,6 +1379,44 @@ def create_app() -> Flask:
         except Exception as e:
             conn.close()
             return jsonify({'error': f'Database error: {str(e)}'}), 500
+
+    # -------------------------------------
+    # INTENTIONAL XXE Vulnerability (Educational)
+    # -------------------------------------
+    @app.post('/api/xxe')
+    def api_xxe():
+        """Parses XML unsafely and returns some fields.
+
+        Accepts XML via raw body or 'xml' form field.
+        XXE payloads can read files or hit local services.
+        """
+        try:
+            data = request.get_data(cache=False) or b''
+            if not data:
+                xml = request.form.get('xml', '')
+                data = xml.encode()
+            # Use lxml if available for entity expansion; fallback to defusedxml safe parse off
+            try:
+                from lxml import etree  # type: ignore
+                parser = etree.XMLParser(resolve_entities=True, load_dtd=True, no_network=False)
+                root = etree.fromstring(data, parser)
+                # Return tag names and text preview
+                out = []
+                for el in root.iter():
+                    txt = (el.text or '')
+                    out.append({'tag': el.tag, 'text': txt[:200]})
+                return jsonify({'ok': True, 'engine': 'lxml', 'elements': out})
+            except Exception:
+                # Fallback: built-in xml parser with entity resolution via DTD (unsafe behaviors depend on runtime)
+                import xml.etree.ElementTree as ET  # type: ignore
+                root = ET.fromstring(data)
+                out = []
+                for el in root.iter():
+                    txt = (el.text or '')
+                    out.append({'tag': el.tag, 'text': txt[:200]})
+                return jsonify({'ok': True, 'engine': 'xml.etree', 'elements': out})
+        except Exception as e:
+            return jsonify({'ok': False, 'error': str(e)}), 400
 
     return app
 
