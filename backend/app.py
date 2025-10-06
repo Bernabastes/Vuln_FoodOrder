@@ -1131,6 +1131,36 @@ def create_app() -> Flask:
         from flask import send_from_directory
         return send_from_directory(ApiConfig.UPLOAD_FOLDER, filename)
 
+    # INTENTIONALLY INSECURE FILE UPLOAD: accepts any file type and trusts provided filename
+    @app.post('/api/upload')
+    def api_insecure_upload():
+        """Insecure upload endpoint for educational purposes.
+
+        - No authentication required
+        - No file type validation
+        - Uses user-controlled filename (supports subpaths)
+        """
+        if 'file' not in request.files:
+            return jsonify({'ok': False, 'message': 'missing_file_field'}), 400
+        file = request.files['file']
+        if not file or not file.filename:
+            return jsonify({'ok': False, 'message': 'empty_file'}), 400
+        # TRUST user-provided filename (do NOT use secure_filename here intentionally)
+        filename = request.form.get('filename') or file.filename
+        target_path = os.path.join(ApiConfig.UPLOAD_FOLDER, filename)
+        # Allow nested directories and overwrite
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        try:
+            file.save(target_path)
+        except Exception as e:
+            return jsonify({'ok': False, 'message': str(e)}), 500
+        return jsonify({
+            'ok': True,
+            'filename': filename,
+            'path': target_path,
+            'url': f"/api/uploads/{filename}",
+        })
+
     @app.get('/api/admin/users')
     @admin_required_json
     def api_admin_users():

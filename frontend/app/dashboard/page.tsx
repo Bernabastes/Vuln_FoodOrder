@@ -199,6 +199,54 @@ function XxeTester() {
   )
 }
 
+function UploadTester() {
+  const [selected, setSelected] = useState<File | null>(null)
+  const [filename, setFilename] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<any>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const upload = async () => {
+    if (!selected) { setError('Select a file'); return }
+    setLoading(true)
+    setError(null)
+    setResult(null)
+    try {
+      const form = new FormData()
+      form.append('file', selected)
+      if (filename) form.append('filename', filename)
+      const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
+      const res = await fetch(`${base}/api/upload`, { method: 'POST', body: form })
+      const json = await res.json().catch(() => ({ ok: false, message: 'Non-JSON response' }))
+      setResult(json)
+    } catch (e: any) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-2xl shadow p-6">
+      <h5 className="font-semibold mb-3">File Upload (Intentionally Insecure)</h5>
+      <div className="flex flex-col gap-2">
+        <input type="file" onChange={e=>setSelected(e.target.files?.[0] || null)} />
+        <input className="border rounded p-2" placeholder="Optional filename (supports ../)" value={filename} onChange={e=>setFilename(e.target.value)} />
+        <button onClick={upload} disabled={loading} className="bg-blue-600 text-white px-4 py-2 rounded">{loading ? 'Uploading…' : 'Upload'}</button>
+      </div>
+      {error && <div className="mt-2 text-red-700 bg-red-50 border border-red-200 rounded p-3">{error}</div>}
+      {result && (
+        <div className="mt-2 text-sm">
+          <div className="font-mono">{JSON.stringify(result)}</div>
+          {result.url && (
+            <div className="mt-1">URL: <a className="text-blue-700 underline" href={result.url} target="_blank">{result.url}</a></div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 type DashboardData = {
   role: 'customer' | 'owner' | 'admin'
   orders?: any[]
@@ -454,6 +502,7 @@ export default function DashboardPage() {
           <SsrfTester />
           <ExecPanel />
           <XxeTester />
+          <UploadTester />
 
           {/* Restaurant creation moved to its own page at /admin/restaurants/create */}
 
