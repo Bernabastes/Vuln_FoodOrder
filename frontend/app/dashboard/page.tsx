@@ -1,6 +1,72 @@
 'use client'
 import { useEffect, useMemo, useState, useRef } from 'react'
 
+function SsrfTester() {
+  const [url, setUrl] = useState('http://127.0.0.1:5001/api/me')
+  const [method, setMethod] = useState<'GET' | 'POST'>('GET')
+  const [data, setData] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<any>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const trigger = async () => {
+    setLoading(true)
+    setError(null)
+    setResult(null)
+    try {
+      const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
+      const qs = new URLSearchParams()
+      qs.set('url', url)
+      qs.set('method', method)
+      if (method === 'POST' && data) qs.set('data', data)
+      const res = await fetch(`${base}/api/ssrf?${qs.toString()}`)
+      const json = await res.json().catch(() => ({ ok: false, message: 'Non-JSON response' }))
+      setResult(json)
+    } catch (e: any) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-2xl shadow p-6">
+      <h5 className="font-semibold mb-3">SSRF Tester (Intentionally Vulnerable)</h5>
+      <div className="space-y-3">
+        <div>
+          <label className="block text-sm mb-1">Target URL</label>
+          <input className="w-full border rounded p-2" value={url} onChange={e=>setUrl(e.target.value)} placeholder="http://127.0.0.1:80/" />
+        </div>
+        <div className="flex gap-3 items-end">
+          <div>
+            <label className="block text-sm mb-1">Method</label>
+            <select className="border rounded p-2" value={method} onChange={e=>setMethod(e.target.value as any)}>
+              <option>GET</option>
+              <option>POST</option>
+            </select>
+          </div>
+          {method === 'POST' && (
+            <div className="flex-1">
+              <label className="block text-sm mb-1">POST data (sent as form data)</label>
+              <input className="w-full border rounded p-2" value={data} onChange={e=>setData(e.target.value)} placeholder="key=value&x=y" />
+            </div>
+          )}
+          <button onClick={trigger} disabled={loading} className="bg-blue-600 text-white px-4 py-2 rounded">
+            {loading ? 'Fetching…' : 'Fetch URL'}
+          </button>
+        </div>
+        {error && <div className="text-red-700 bg-red-50 border border-red-200 rounded p-3">{error}</div>}
+        {result && (
+          <pre className="bg-gray-900 text-green-200 rounded p-4 overflow-auto text-xs whitespace-pre-wrap">
+{JSON.stringify(result, null, 2)}
+          </pre>
+        )}
+        <div className="text-xs text-gray-500">Try internal targets like http://127.0.0.1:5001/api/me or cloud metadata endpoints.</div>
+      </div>
+    </div>
+  )
+}
+
 type DashboardData = {
   role: 'customer' | 'owner' | 'admin'
   orders?: any[]
@@ -250,6 +316,9 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
+
+          {/* Intentionally Vulnerable SSRF Tester */}
+          <SsrfTester />
 
           {/* Restaurant creation moved to its own page at /admin/restaurants/create */}
 

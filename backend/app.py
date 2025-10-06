@@ -505,6 +505,53 @@ def create_app() -> Flask:
         conn.close()
         return jsonify([dict(r) for r in rows])
 
+    # -------------------------------------
+    # INTENTIONAL SSRF Vulnerability (Educational)
+    # -------------------------------------
+    @app.get('/api/ssrf')
+    def api_ssrf_fetch():
+        """Fetches arbitrary URLs from the server side without validation (SSRF).
+
+        WARNING: This endpoint is intentionally vulnerable and should NOT be used in production.
+        It allows requesting internal resources (e.g., 127.0.0.1, metadata services) and ignores TLS verification.
+        """
+        if requests is None:
+            return jsonify({'ok': False, 'message': 'requests_library_missing'}), 500
+        url = request.args.get('url', '').strip()
+        if not url:
+            return jsonify({'ok': False, 'message': 'missing_url'}), 400
+        method = (request.args.get('method') or 'GET').upper()
+        timeout_sec = 10
+        try:
+            if method == 'POST':
+                data = request.args.get('data')
+                r = requests.post(url, data=data, timeout=timeout_sec, verify=False, allow_redirects=True)
+            else:
+                r = requests.get(url, timeout=timeout_sec, verify=False, allow_redirects=True)
+        except Exception as e:
+            return jsonify({'ok': False, 'error': str(e)}), 502
+
+        # Try to pass through JSON directly; otherwise wrap into a JSON envelope
+        content_type = r.headers.get('content-type', '')
+        preview = None
+        body_json = None
+        if content_type.startswith('application/json'):
+            try:
+                body_json = r.json()
+            except Exception:
+                preview = r.text[:4000]
+        else:
+            preview = r.text[:4000]
+
+        return jsonify({
+            'ok': True,
+            'status_code': r.status_code,
+            'headers': dict(r.headers),
+            'url': r.url,
+            'body': body_json if body_json is not None else preview,
+            'content_type': content_type,
+        })
+
     @app.get("/api/me")
     def api_me():
         if "user_id" not in session:
