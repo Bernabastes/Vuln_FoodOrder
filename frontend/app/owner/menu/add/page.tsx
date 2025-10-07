@@ -22,7 +22,9 @@ export default function AddMenuItemPage() {
     if (image) form.append('image', image)
 
     try {
-      const res = await fetch(`${base}/api/menu/add`, { method: 'POST', credentials: 'include', body: form })
+      const params = new URLSearchParams(window.location.search)
+      const ownerFlag = params.get('owner') || '0'
+      const res = await fetch(`${base}/api/menu/add?owner=${encodeURIComponent(ownerFlag)}`, { method: 'POST', credentials: 'include', body: form })
       if (res.ok) {
         setMessage({ type: 'success', text: 'Menu item added successfully!' })
         // Reset form fields

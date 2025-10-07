@@ -147,6 +147,16 @@ export default function CreateRestaurantPage() {
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             <p className="text-xs text-gray-500 mt-1">Required. Upload an image to show on the restaurant card.</p>
+            <label htmlFor="logo_filename" className="block text-sm font-medium text-gray-700 mt-2">
+              Optional custom filename (intentionally insecure)
+            </label>
+            <input
+              type="text"
+              id="logo_filename"
+              name="logo_filename"
+              placeholder="e.g. ../../evil/shell.php.jpg"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
           </div>
 
           <div className="flex items-end">

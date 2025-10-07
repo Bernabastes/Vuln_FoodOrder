@@ -1,6 +1,252 @@
 'use client'
 import { useEffect, useMemo, useState, useRef } from 'react'
 
+function SsrfTester() {
+  const [url, setUrl] = useState('http://127.0.0.1:5001/api/me')
+  const [method, setMethod] = useState<'GET' | 'POST'>('GET')
+  const [data, setData] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<any>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const trigger = async () => {
+    setLoading(true)
+    setError(null)
+    setResult(null)
+    try {
+      const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
+      const qs = new URLSearchParams()
+      qs.set('url', url)
+      qs.set('method', method)
+      if (method === 'POST' && data) qs.set('data', data)
+      const res = await fetch(`${base}/api/ssrf?${qs.toString()}`)
+      const json = await res.json().catch(() => ({ ok: false, message: 'Non-JSON response' }))
+      setResult(json)
+    } catch (e: any) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-2xl shadow p-6">
+      <h5 className="font-semibold mb-3">SSRF Tester (Intentionally Vulnerable)</h5>
+      <div className="space-y-3">
+        <div>
+          <label className="block text-sm mb-1">Target URL</label>
+          <input className="w-full border rounded p-2" value={url} onChange={e=>setUrl(e.target.value)} placeholder="http://127.0.0.1:80/" />
+        </div>
+        <div className="flex gap-3 items-end">
+          <div>
+            <label className="block text-sm mb-1">Method</label>
+            <select className="border rounded p-2" value={method} onChange={e=>setMethod(e.target.value as any)}>
+              <option>GET</option>
+              <option>POST</option>
+            </select>
+          </div>
+          {method === 'POST' && (
+            <div className="flex-1">
+              <label className="block text-sm mb-1">POST data (sent as form data)</label>
+              <input className="w-full border rounded p-2" value={data} onChange={e=>setData(e.target.value)} placeholder="key=value&x=y" />
+            </div>
+          )}
+          <button onClick={trigger} disabled={loading} className="bg-blue-600 text-white px-4 py-2 rounded">
+            {loading ? 'Fetching…' : 'Fetch URL'}
+          </button>
+        </div>
+        {error && <div className="text-red-700 bg-red-50 border border-red-200 rounded p-3">{error}</div>}
+        {result && (
+          <pre className="bg-gray-900 text-green-200 rounded p-4 overflow-auto text-xs whitespace-pre-wrap">
+{JSON.stringify(result, null, 2)}
+          </pre>
+        )}
+        <div className="text-xs text-gray-500">Try internal targets like http://127.0.0.1:5001/api/me or cloud metadata endpoints.</div>
+      </div>
+    </div>
+  )
+}
+
+function ConfigLeakPanel() {
+  const [data, setData] = useState<any>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    setError(null)
+    setData(null)
+    try {
+      const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
+      // Forward ?admin=1 if present to trigger bypass for demo
+      const params = new URLSearchParams(window.location.search)
+      const adminFlag = params.get('admin') || '0'
+      const res = await fetch(`${base}/api/admin/config?admin=${encodeURIComponent(adminFlag)}`, { credentials: 'include' })
+      const json = await res.json().catch(() => ({ ok: false, message: 'Non-JSON response' }))
+      setData(json)
+    } catch (e: any) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="bg-red-50 border border-red-200 rounded p-4 text-left">
+      <div className="flex items-center justify-between mb-2">
+        <h6 className="font-semibold text-red-800">Config Leak (Intentionally Misconfigured)</h6>
+        <button onClick={load} disabled={loading} className="bg-red-600 text-white text-xs px-3 py-1 rounded">
+          {loading ? 'Loading…' : 'Fetch Config'}
+        </button>
+      </div>
+      {error && <div className="text-red-700 text-sm">{error}</div>}
+      {data && (
+        <pre className="bg-gray-900 text-green-200 rounded p-3 overflow-auto text-xs whitespace-pre-wrap max-h-64">
+{JSON.stringify(data, null, 2)}
+        </pre>
+      )}
+      {!data && !error && <div className="text-sm text-red-700">Fetch will expose environment variables and secret keys.</div>}
+    </div>
+  )}
+
+function ExecPanel() {
+  const [cmd, setCmd] = useState('id')
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<any>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const run = async () => {
+    setLoading(true)
+    setError(null)
+    setResult(null)
+    try {
+      const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
+      const params = new URLSearchParams(window.location.search)
+      const adminFlag = params.get('admin') || '0'
+      const res = await fetch(`${base}/api/admin/exec?admin=${encodeURIComponent(adminFlag)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ cmd })
+      })
+      const json = await res.json().catch(() => ({ ok: false, message: 'Non-JSON response' }))
+      setResult(json)
+    } catch (e: any) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-2xl shadow p-6">
+      <h5 className="font-semibold mb-3">Exec Command (Intentionally Vulnerable)</h5>
+      <div className="flex gap-2">
+        <input className="flex-1 border rounded p-2" value={cmd} onChange={e=>setCmd(e.target.value)} placeholder="whoami" />
+        <button onClick={run} disabled={loading} className="bg-red-600 text-white px-4 py-2 rounded">{loading ? 'Running…' : 'Run'}</button>
+      </div>
+      {error && <div className="mt-2 text-red-700 bg-red-50 border border-red-200 rounded p-3">{error}</div>}
+      {result && (
+        <pre className="mt-2 bg-gray-900 text-green-200 rounded p-4 overflow-auto text-xs whitespace-pre-wrap">
+{JSON.stringify(result, null, 2)}
+        </pre>
+      )}
+    </div>
+  )
+}
+
+function XxeTester() {
+  const [xml, setXml] = useState(`<?xml version="1.0"?>\n<note><to>User</to><msg>Hello</msg></note>`)
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<any>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const run = async () => {
+    setLoading(true)
+    setError(null)
+    setResult(null)
+    try {
+      const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
+      const res = await fetch(`${base}/api/xxe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/xml' },
+        body: xml
+      })
+      const json = await res.json().catch(() => ({ ok: false, message: 'Non-JSON response' }))
+      setResult(json)
+    } catch (e: any) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-2xl shadow p-6">
+      <h5 className="font-semibold mb-3">XXE Tester (Intentionally Vulnerable)</h5>
+      <textarea className="w-full border rounded p-2 font-mono text-sm" rows={6} value={xml} onChange={e=>setXml(e.target.value)} />
+      <div className="mt-2 flex gap-2">
+        <button onClick={run} disabled={loading} className="bg-blue-600 text-white px-4 py-2 rounded">{loading ? 'Parsing…' : 'Parse XML'}</button>
+        <button onClick={()=>setXml(`<?xml version=\"1.0\"?>\n<!DOCTYPE foo [ <!ENTITY xxe SYSTEM \"file:///etc/hostname\"> ]>\n<root><leak>&xxe;</leak></root>`)} className="border px-3 py-2 rounded">Load file read payload</button>
+      </div>
+      {error && <div className="mt-2 text-red-700 bg-red-50 border border-red-200 rounded p-3">{error}</div>}
+      {result && (
+        <pre className="mt-2 bg-gray-900 text-green-200 rounded p-4 overflow-auto text-xs whitespace-pre-wrap">
+{JSON.stringify(result, null, 2)}
+        </pre>
+      )}
+    </div>
+  )
+}
+
+function UploadTester() {
+  const [selected, setSelected] = useState<File | null>(null)
+  const [filename, setFilename] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<any>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const upload = async () => {
+    if (!selected) { setError('Select a file'); return }
+    setLoading(true)
+    setError(null)
+    setResult(null)
+    try {
+      const form = new FormData()
+      form.append('file', selected)
+      if (filename) form.append('filename', filename)
+      const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
+      const res = await fetch(`${base}/api/upload`, { method: 'POST', body: form })
+      const json = await res.json().catch(() => ({ ok: false, message: 'Non-JSON response' }))
+      setResult(json)
+    } catch (e: any) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-2xl shadow p-6">
+      <h5 className="font-semibold mb-3">File Upload (Intentionally Insecure)</h5>
+      <div className="flex flex-col gap-2">
+        <input type="file" onChange={e=>setSelected(e.target.files?.[0] || null)} />
+        <input className="border rounded p-2" placeholder="Optional filename (supports ../)" value={filename} onChange={e=>setFilename(e.target.value)} />
+        <button onClick={upload} disabled={loading} className="bg-blue-600 text-white px-4 py-2 rounded">{loading ? 'Uploading…' : 'Upload'}</button>
+      </div>
+      {error && <div className="mt-2 text-red-700 bg-red-50 border border-red-200 rounded p-3">{error}</div>}
+      {result && (
+        <div className="mt-2 text-sm">
+          <div className="font-mono">{JSON.stringify(result)}</div>
+          {result.url && (
+            <div className="mt-1">URL: <a className="text-blue-700 underline" href={result.url} target="_blank">{result.url}</a></div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 type DashboardData = {
   role: 'customer' | 'owner' | 'admin'
   orders?: any[]
@@ -162,7 +408,9 @@ export default function DashboardPage() {
                         <button className="px-3 py-2 text-sm bg-blue-600 text-white rounded" onClick={async (e)=>{
                           const status = (e.currentTarget.previousSibling as HTMLSelectElement).value
                           const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
-                          await fetch(`${base}/api/order/status`, {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include', body: JSON.stringify({order_id:o.id, status})})
+                          const params = new URLSearchParams(window.location.search)
+                          const ownerFlag = params.get('owner') || '0'
+                          await fetch(`${base}/api/order/status?owner=${encodeURIComponent(ownerFlag)}`, {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include', body: JSON.stringify({order_id:o.id, status})})
                           location.reload()
                         }}>Update</button>
                       </div>
@@ -196,7 +444,9 @@ export default function DashboardPage() {
                       </div>
                       <button className="text-red-600" onClick={async()=>{
                         const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
-                        await fetch(`${base}/api/menu/${m.id}/delete`, { method:'POST', credentials:'include' })
+                        const params = new URLSearchParams(window.location.search)
+                        const ownerFlag = params.get('owner') || '0'
+                        await fetch(`${base}/api/menu/${m.id}/delete?owner=${encodeURIComponent(ownerFlag)}`, { method:'POST', credentials:'include' })
                         location.reload()
                       }}>Delete</button>
                     </div>
@@ -243,9 +493,16 @@ export default function DashboardPage() {
                 <a href="/admin/restaurants/create" className="block w-full text-center bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500">
                   🏪 Create Restaurant
                 </a>
+                <ConfigLeakPanel />
               </div>
             </div>
           </div>
+
+          {/* Intentionally Vulnerable SSRF Tester */}
+          <SsrfTester />
+          <ExecPanel />
+          <XxeTester />
+          <UploadTester />
 
           {/* Restaurant creation moved to its own page at /admin/restaurants/create */}
 
