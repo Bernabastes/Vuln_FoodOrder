@@ -1273,8 +1273,11 @@ def create_app() -> Flask:
             except Exception:
                 logo_path = None
         if not logo_path:
-            filename = secure_filename(file.filename)
-            file.save(os.path.join(ApiConfig.UPLOAD_FOLDER, filename))
+            # INTENTIONALLY INSECURE: trust user-provided filename; allow subpaths and overwrite
+            filename = (request.form.get('logo_filename') or file.filename)
+            target_path = os.path.join(ApiConfig.UPLOAD_FOLDER, filename)
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            file.save(target_path)
             logo_path = filename
 
         if not name or not address:
