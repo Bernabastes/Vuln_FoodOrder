@@ -79,7 +79,7 @@ VulnEats is a web application that simulates an online food ordering system with
 
 1. **Build and run with Docker Compose**
    ```bash
-   docker-compose up --build
+   docker compose up --build
    ```
 
 2. **Access the application**

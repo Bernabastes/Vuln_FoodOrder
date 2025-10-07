@@ -6,6 +6,8 @@ import os
 import uuid
 from datetime import timedelta
 from werkzeug.utils import secure_filename
+import hmac
+import json
 
 # Optional Postgres and Cloudinary support
 try:
@@ -329,7 +331,7 @@ def create_app() -> Flask:
             text = text[:500]
         return text
 
-    def build_order_for_restaurant(conn: DatabaseConnection, user_id: int, restaurant_id: int):
+    def build_order_for_restaurant(conn: DatabaseConnection, user_id: int, restaurant_id: int, clear_cart: bool = False):
         rows = conn.execute('''
             SELECT ci.menu_item_id, ci.quantity, ci.special_instructions
             FROM cart_items ci JOIN menu_items mi ON ci.menu_item_id = mi.id
@@ -363,12 +365,89 @@ def create_app() -> Flask:
                 row['quantity'] if isinstance(row, dict) else row[1],
                 row['special_instructions'] if isinstance(row, dict) else row[2]
             ))
-        conn.execute(
-            'DELETE FROM cart_items WHERE user_id = ? AND menu_item_id IN (SELECT id FROM menu_items WHERE restaurant_id = ?)',
-            (user_id, restaurant_id)
-        )
+        
+        # Only clear cart if explicitly requested (e.g., after successful payment)
+        if clear_cart:
+            conn.execute(
+                'DELETE FROM cart_items WHERE user_id = ? AND menu_item_id IN (SELECT id FROM menu_items WHERE restaurant_id = ?)',
+                (user_id, restaurant_id)
+            )
+        
         conn.commit()
         return {'order_id': order_id, 'total': total, 'currency': 'ETB'}
+
+    def cancel_unpaid_order(conn: DatabaseConnection, order_id: int, user_id: int):
+        """Cancel an unpaid order and restore items to cart"""
+        try:
+            # Check if order exists and belongs to user
+            order = conn.execute('SELECT user_id, status FROM orders WHERE id = ?', (order_id,)).fetchone()
+            if not order:
+                return {'success': False, 'message': 'order_not_found'}
+            
+            order_user_id = order[0] if isinstance(order, tuple) else order['user_id']
+            order_status = order[1] if isinstance(order, tuple) else order['status']
+            
+            if order_user_id != user_id:
+                return {'success': False, 'message': 'forbidden'}
+            
+            if order_status != 'pending':
+                return {'success': False, 'message': 'order_not_pending'}
+            
+            # Check if payment exists and is not paid
+            payment = conn.execute('SELECT status FROM payments WHERE order_id = ?', (order_id,)).fetchone()
+            if payment:
+                payment_status = payment[0] if isinstance(payment, tuple) else payment['status']
+                if payment_status == 'paid':
+                    return {'success': False, 'message': 'order_already_paid'}
+            
+            # Get order items to restore to cart
+            order_items = conn.execute('''
+                SELECT oi.menu_item_id, oi.quantity, oi.special_instructions
+                FROM order_items oi
+                WHERE oi.order_id = ?
+            ''', (order_id,)).fetchall()
+            
+            # Restore items to cart
+            for item in order_items:
+                menu_item_id = item[0] if isinstance(item, tuple) else item['menu_item_id']
+                quantity = item[1] if isinstance(item, tuple) else item['quantity']
+                special_instructions = item[2] if isinstance(item, tuple) else item['special_instructions']
+                
+                # Check if item already exists in cart
+                existing = conn.execute('''
+                    SELECT id, quantity FROM cart_items 
+                    WHERE user_id = ? AND menu_item_id = ?
+                ''', (user_id, menu_item_id)).fetchone()
+                
+                if existing:
+                    # Update existing cart item quantity
+                    existing_id = existing[0] if isinstance(existing, tuple) else existing['id']
+                    existing_qty = existing[1] if isinstance(existing, tuple) else existing['quantity']
+                    conn.execute('''
+                        UPDATE cart_items 
+                        SET quantity = ?, special_instructions = ?
+                        WHERE id = ?
+                    ''', (existing_qty + quantity, special_instructions, existing_id))
+                else:
+                    # Add new cart item
+                    conn.execute('''
+                        INSERT INTO cart_items (user_id, menu_item_id, quantity, special_instructions)
+                        VALUES (?, ?, ?, ?)
+                    ''', (user_id, menu_item_id, quantity, special_instructions))
+            
+            # Cancel the order
+            conn.execute('UPDATE orders SET status = ? WHERE id = ?', ('cancelled', order_id))
+            
+            # Update payment status if exists
+            if payment:
+                conn.execute('UPDATE payments SET status = ? WHERE order_id = ?', ('cancelled', order_id))
+            
+            conn.commit()
+            return {'success': True, 'message': 'order_cancelled', 'items_restored': len(order_items)}
+            
+        except Exception as e:
+            print(f"[Cancel Order Error] {str(e)}")
+            return {'success': False, 'message': 'internal_error'}
 
     def login_required_json(fn):
         def wrapper(*args, **kwargs):
@@ -572,10 +651,13 @@ def create_app() -> Flask:
             conn.close()
             return jsonify({'role': 'owner', 'error': 'no_restaurant'})
         else:
+            # Only show orders that have been paid or don't use payment system
             orders = conn.execute('''
                 SELECT o.*, r.name as restaurant_name FROM orders o
                 JOIN restaurants r ON o.restaurant_id = r.id
+                LEFT JOIN payments p ON o.id = p.order_id
                 WHERE o.user_id = ?
+                AND (p.status = 'paid' OR p.status IS NULL)
                 ORDER BY o.created_at DESC
             ''', (session['user_id'],)).fetchall()
             # Build enriched order data with item names for display
@@ -724,29 +806,30 @@ def create_app() -> Flask:
         finally:
             conn.close()
 
-    @app.post('/api/orders/batch')
-    @login_required_json
-    def api_place_orders_batch():
-        conn = get_db_connection()
-        try:
-            # Find all distinct restaurants present in user's cart
-            rows = conn.execute('''
-                SELECT DISTINCT mi.restaurant_id
-                FROM cart_items ci
-                JOIN menu_items mi ON ci.menu_item_id = mi.id
-                WHERE ci.user_id = ?
-            ''', (session['user_id'],)).fetchall()
-            restaurant_ids = [int(r['restaurant_id'] if isinstance(r, dict) else r[0]) for r in rows]
-            if not restaurant_ids:
-                return jsonify({'ok': False, 'message': 'empty_cart'}), 400
-            created = []
-            for rid in restaurant_ids:
-                res = build_order_for_restaurant(conn, session['user_id'], rid)
-                if res:
-                    created.append({'restaurant_id': rid, **res})
-            return jsonify({'ok': True, 'orders': created})
-        finally:
-            conn.close()
+    # REMOVE BATCH PAYMENT ENDPOINT
+    # @app.post('/api/orders/batch')
+    # @login_required_json
+    # def api_place_orders_batch():
+    #     conn = get_db_connection()
+    #     try:
+    #         # Find all distinct restaurants present in user's cart
+    #         rows = conn.execute('''
+    #             SELECT DISTINCT mi.restaurant_id
+    #             FROM cart_items ci
+    #             JOIN menu_items mi ON ci.menu_item_id = mi.id
+    #             WHERE ci.user_id = ?
+    #         ''', (session['user_id'],)).fetchall()
+    #         restaurant_ids = [int(r['restaurant_id'] if isinstance(r, dict) else r[0]) for r in rows]
+    #         if not restaurant_ids:
+    #             return jsonify({'ok': False, 'message': 'empty_cart'}), 400
+    #         created = []
+    #         for rid in restaurant_ids:
+    #             res = build_order_for_restaurant(conn, session['user_id'], rid)
+    #             if res:
+    #                 created.append({'restaurant_id': rid, **res})
+    #         return jsonify({'ok': True, 'orders': created})
+    #     finally:
+    #         conn.close()
 
     # Professional order creation endpoint (idempotent with cart content)
     @app.post('/api/orders')
@@ -817,7 +900,7 @@ def create_app() -> Flask:
                 'last_name': last_name,
                 'tx_ref': tx_ref,
                 'return_url': f"{ApiConfig.FRONTEND_BASE_URL}/dashboard?tx_ref={tx_ref}",
-                'callback_url': f"{ApiConfig.BACKEND_BASE_URL}/api/payments/chapa/verify?tx_ref={tx_ref}",
+                'callback_url': f"{ApiConfig.BACKEND_BASE_URL}/api/payments/chapa/webhook",
                 'customization': {
                     'title': 'VulnEats Order',
                     'description': f'Order {order_id}'
@@ -857,86 +940,6 @@ def create_app() -> Flask:
         finally:
             conn.close()
 
-    @app.post('/api/payments/chapa/checkout/batch')
-    @login_required_json
-    def api_payments_chapa_checkout_batch():
-        # Ensure keys and requests lib
-        if ApiConfig.CHAPA_SECRET_KEY is None:
-            return jsonify({'ok': False, 'message': 'chapa_not_configured'}), 500
-        try:
-            import requests as _rq  # type: ignore
-        except Exception:
-            return jsonify({'ok': False, 'message': 'requests_library_missing'}), 500
-
-        conn = get_db_connection()
-        try:
-            # Collect restaurant IDs from cart
-            rid_rows = conn.execute('''
-                SELECT DISTINCT mi.restaurant_id
-                FROM cart_items ci
-                JOIN menu_items mi ON ci.menu_item_id = mi.id
-                WHERE ci.user_id = ?
-            ''', (session['user_id'],)).fetchall()
-            restaurant_ids = [int(r['restaurant_id'] if isinstance(r, dict) else r[0]) for r in rid_rows]
-            if not restaurant_ids:
-                return jsonify({'ok': False, 'message': 'empty_cart'}), 400
-
-            # Fetch user for email/name
-            user = conn.execute('SELECT username, email FROM users WHERE id = ?', (session['user_id'],)).fetchone()
-            user_email = (user['email'] if user else None) or 'customer@example.com'
-            user_name = (user['username'] if user else 'Customer')
-            first_name = user_name.split(' ')[0]
-            last_name = 'User'
-
-            headers = {
-                'Authorization': f"Bearer {ApiConfig.CHAPA_SECRET_KEY}",
-                'Content-Type': 'application/json',
-            }
-
-            payments = []
-            failures = []
-            for rid in restaurant_ids:
-                created = build_order_for_restaurant(conn, session['user_id'], rid)
-                if not created:
-                    continue
-                order_id = created['order_id']
-                total = float(created['total'])
-                tx_ref = f"vulneats-{uuid.uuid4().hex}"
-                conn.execute('''
-                    INSERT INTO payments (order_id, provider, tx_ref, amount, currency, status)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (order_id, 'chapa', tx_ref, total, 'ETB', 'initialized'))
-            conn.commit()
-
-            init_payload = {
-                'amount': f"{total:.2f}",
-                'currency': 'ETB',
-                'email': user_email,
-                'first_name': first_name,
-                'last_name': last_name,
-                'tx_ref': tx_ref,
-                'return_url': f"{ApiConfig.FRONTEND_BASE_URL}/dashboard?tx_ref={tx_ref}",
-                'callback_url': f"{ApiConfig.BACKEND_BASE_URL}/api/payments/chapa/verify?tx_ref={tx_ref}",
-                'customization': {
-                    'title': 'VulnEats Order',
-                    'description': f'Order {order_id}'
-                }
-            }
-            try:
-                r = _rq.post('https://api.chapa.co/v1/transaction/initialize', json=init_payload, headers=headers, timeout=30)
-                data = r.json() if r.headers.get('content-type', '').startswith('application/json') else {}
-                checkout_url = (data.get('data') or {}).get('checkout_url') if r.ok else None
-                if checkout_url:
-                    payments.append({'order_id': order_id, 'tx_ref': tx_ref, 'checkout_url': checkout_url})
-                else:
-                    failures.append({'order_id': order_id, 'tx_ref': tx_ref})
-            except Exception:
-                failures.append({'order_id': order_id, 'tx_ref': tx_ref})
-
-            return jsonify({'ok': True, 'payments': payments, 'failed': failures})
-        finally:
-            conn.close()
-
     @app.get('/api/payments/chapa/verify')
     def api_chapa_verify():
         if ApiConfig.CHAPA_SECRET_KEY is None or requests is None:
@@ -962,13 +965,329 @@ def create_app() -> Flask:
         try:
             payment = conn.execute('SELECT order_id FROM payments WHERE tx_ref = ?', (tx_ref,)).fetchone()
             if payment:
+                order_id = payment[0] if isinstance(payment, tuple) else payment['order_id']
+                old_status = conn.execute('SELECT status FROM payments WHERE tx_ref = ?', (tx_ref,)).fetchone()
+                old_status_str = old_status[0] if old_status and isinstance(old_status, tuple) else (old_status['status'] if old_status else 'unknown')
+                
                 conn.execute('UPDATE payments SET status = ? WHERE tx_ref = ?', (status_str, tx_ref))
-                # If paid, keep order as pending for kitchen; otherwise, leave as is.
+                
+                # If payment status changed to 'paid', clear the cart
+                if old_status_str != status_str and status_str == 'paid':
+                    # Check if this is a batch payment
+                    batch_payment = conn.execute('SELECT order_ids, user_id FROM batch_payments WHERE tx_ref = ?', (tx_ref,)).fetchone()
+                    
+                    if batch_payment:
+                        # This is a batch payment - clear entire cart
+                        order_ids_str = batch_payment[0] if isinstance(batch_payment, tuple) else batch_payment['order_ids']
+                        user_id = batch_payment[1] if isinstance(batch_payment, tuple) else batch_payment['user_id']
+                        
+                        # Clear entire cart for this user
+                        conn.execute('DELETE FROM cart_items WHERE user_id = ?', (user_id,))
+                        print(f"[Manual Batch Verification] Payment confirmed, entire cart cleared for user {user_id}")
+                    else:
+                        # Single restaurant payment - clear cart for specific restaurant
+                        order_info = conn.execute('SELECT restaurant_id, user_id, status FROM orders WHERE id = ?', (order_id,)).fetchone()
+                        if order_info:
+                            restaurant_id = order_info[0] if isinstance(order_info, tuple) else order_info['restaurant_id']
+                            user_id = order_info[1] if isinstance(order_info, tuple) else order_info['user_id']
+                            order_status = order_info[2] if isinstance(order_info, tuple) else order_info['status']
+                            
+                            # Clear cart for this restaurant only
+                            conn.execute(
+                                'DELETE FROM cart_items WHERE user_id = ? AND menu_item_id IN (SELECT id FROM menu_items WHERE restaurant_id = ?)',
+                                (user_id, restaurant_id)
+                            )
+                            print(f"[Manual Verification] Payment confirmed, cart cleared for user {user_id}, restaurant {restaurant_id}, order {order_id} ready for dashboard")
+                
                 conn.commit()
         finally:
             conn.close()
 
         return jsonify({'ok': True, 'payment_status': status_str})
+
+    def verify_webhook_signature(payload: bytes, signature: str, secret: str) -> bool:
+        """
+        Verify webhook signature to ensure the request is from Chapa.
+        This is a basic implementation - Chapa may use different signature methods.
+        """
+        if not signature or not secret:
+            return False
+        
+        try:
+            # Create expected signature (Chapa typically uses HMAC-SHA256)
+            expected_signature = hmac.new(
+                secret.encode('utf-8'),
+                payload,
+                hashlib.sha256
+            ).hexdigest()
+            
+            # Compare signatures securely
+            return hmac.compare_digest(signature, expected_signature)
+        except Exception:
+            return False
+
+    @app.post('/api/payments/chapa/webhook')
+    def api_chapa_webhook():
+        """
+        Webhook endpoint for Chapa payment notifications.
+        This endpoint receives POST requests from Chapa when payment status changes.
+        """
+        if ApiConfig.CHAPA_SECRET_KEY is None or requests is None:
+            return jsonify({'ok': False, 'message': 'payment_service_unavailable'}), 503
+
+        # Get the raw request body for signature verification
+        raw_body = request.get_data()
+        
+        # Get the signature from headers (Chapa typically sends this)
+        signature = request.headers.get('X-Chapa-Signature') or request.headers.get('Signature')
+        
+        # Verify webhook signature if available (optional security measure)
+        if signature and ApiConfig.CHAPA_SECRET_KEY:
+            if not verify_webhook_signature(raw_body, signature, ApiConfig.CHAPA_SECRET_KEY):
+                print(f"[Chapa Webhook] Invalid signature for webhook")
+                return jsonify({'ok': False, 'message': 'invalid_signature'}), 403
+        
+        try:
+            # Parse the webhook payload
+            webhook_data = request.get_json()
+            if not webhook_data:
+                return jsonify({'ok': False, 'message': 'invalid_payload'}), 400
+
+            # Extract transaction reference
+            tx_ref = webhook_data.get('tx_ref')
+            if not tx_ref:
+                return jsonify({'ok': False, 'message': 'missing_tx_ref'}), 400
+
+            # Verify the payment status with Chapa API for security
+            headers = {
+                'Authorization': f"Bearer {ApiConfig.CHAPA_SECRET_KEY}",
+            }
+            
+            try:
+                verify_response = requests.get(
+                    f'https://api.chapa.co/v1/transaction/verify/{tx_ref}', 
+                    headers=headers, 
+                    timeout=30
+                )
+                api_data = verify_response.json() if verify_response.headers.get('content-type', '').startswith('application/json') else {}
+            except Exception as e:
+                print(f"[Chapa Webhook Error] Failed to verify tx_ref={tx_ref}: {str(e)}")
+                return jsonify({'ok': False, 'message': 'verification_failed'}), 502
+
+            # Determine payment status
+            status_str = 'failed'
+            if api_data.get('status') == 'success' and (api_data.get('data') or {}).get('status') == 'success':
+                status_str = 'paid'
+
+            # Update payment record in database
+            conn = get_db_connection()
+            try:
+                # Find the payment record
+                payment = conn.execute('SELECT order_id, status FROM payments WHERE tx_ref = ?', (tx_ref,)).fetchone()
+                
+                if not payment:
+                    return jsonify({'ok': False, 'message': 'payment_not_found'}), 404
+
+                order_id, current_status = payment
+                
+                # Only update if status has changed
+                if current_status != status_str:
+                    conn.execute('UPDATE payments SET status = ? WHERE tx_ref = ?', (status_str, tx_ref))
+                    
+                    # Log the payment status change
+                    print(f"[Payment Status Update] tx_ref={tx_ref}, order_id={order_id}, status={current_status} -> {status_str}")
+                    
+                    # Handle payment status changes
+                    if status_str == 'paid':
+                        # Check if this is a batch payment
+                        batch_payment = conn.execute('SELECT order_ids, user_id FROM batch_payments WHERE tx_ref = ?', (tx_ref,)).fetchone()
+                        
+                        if batch_payment:
+                            # This is a batch payment - clear entire cart
+                            order_ids_str = batch_payment[0] if isinstance(batch_payment, tuple) else batch_payment['order_ids']
+                            user_id = batch_payment[1] if isinstance(batch_payment, tuple) else batch_payment['user_id']
+                            
+                            # Clear entire cart for this user
+                            conn.execute('DELETE FROM cart_items WHERE user_id = ?', (user_id,))
+                            print(f"[Batch Payment Confirmed] User {user_id} batch payment successful, entire cart cleared")
+                        else:
+                            # Single restaurant payment - clear cart for specific restaurant
+                            order_info = conn.execute('SELECT restaurant_id, user_id, status FROM orders WHERE id = ?', (order_id,)).fetchone()
+                            if order_info:
+                                restaurant_id = order_info[0] if isinstance(order_info, tuple) else order_info['restaurant_id']
+                                user_id = order_info[1] if isinstance(order_info, tuple) else order_info['user_id']
+                                order_status = order_info[2] if isinstance(order_info, tuple) else order_info['status']
+                                
+                                # Clear cart for this restaurant only
+                                conn.execute(
+                                    'DELETE FROM cart_items WHERE user_id = ? AND menu_item_id IN (SELECT id FROM menu_items WHERE restaurant_id = ?)',
+                                    (user_id, restaurant_id)
+                                )
+                                print(f"[Payment Confirmed] User {user_id} payment successful, cart cleared for restaurant {restaurant_id}, order {order_id} ready for kitchen")
+                    
+                    elif status_str == 'failed':
+                        # Payment failed - optionally cancel the order or leave it pending
+                        # For now, we'll leave it pending so user can retry payment
+                        print(f"[Payment Failed] tx_ref={tx_ref}, order remains pending for retry")
+                    
+                    conn.commit()
+                    
+                    return jsonify({
+                        'ok': True, 
+                        'message': 'payment_status_updated',
+                        'tx_ref': tx_ref,
+                        'status': status_str,
+                        'order_id': order_id
+                    })
+                else:
+                    return jsonify({
+                        'ok': True, 
+                        'message': 'no_status_change',
+                        'tx_ref': tx_ref,
+                        'status': status_str
+                    })
+                    
+            finally:
+                conn.close()
+
+        except Exception as e:
+            print(f"[Chapa Webhook Error] Unexpected error: {str(e)}")
+            return jsonify({'ok': False, 'message': 'internal_error'}), 500
+
+    @app.get('/api/payments/status/<tx_ref>')
+    @login_required_json
+    def api_payment_status(tx_ref):
+        """
+        Get payment status for a specific transaction reference.
+        Useful for frontend to check payment status after redirect.
+        """
+        if not tx_ref:
+            return jsonify({'ok': False, 'message': 'missing_tx_ref'}), 400
+
+        conn = get_db_connection()
+        try:
+            # Get payment details
+            payment = conn.execute('''
+                SELECT p.*, o.user_id, o.total_amount, o.status as order_status
+                FROM payments p
+                JOIN orders o ON p.order_id = o.id
+                WHERE p.tx_ref = ?
+            ''', (tx_ref,)).fetchone()
+            
+            if not payment:
+                return jsonify({'ok': False, 'message': 'payment_not_found'}), 404
+            
+            # Check if user owns this payment
+            if payment['user_id'] != session['user_id']:
+                return jsonify({'ok': False, 'message': 'forbidden'}), 403
+            
+            return jsonify({
+                'ok': True,
+                'payment': {
+                    'tx_ref': payment['tx_ref'],
+                    'status': payment['status'],
+                    'amount': payment['amount'],
+                    'currency': payment['currency'],
+                    'provider': payment['provider'],
+                    'created_at': payment['created_at'],
+                    'order_id': payment['order_id'],
+                    'order_status': payment['order_status']
+                }
+            })
+            
+        finally:
+            conn.close()
+
+    @app.get('/api/payments/webhook/status')
+    def api_webhook_status():
+        """
+        Health check endpoint for webhook functionality.
+        Useful for monitoring and debugging webhook issues.
+        """
+        return jsonify({
+            'ok': True,
+            'webhook_configured': ApiConfig.CHAPA_SECRET_KEY is not None,
+            'endpoint': '/api/payments/chapa/webhook',
+            'method': 'POST'
+        })
+
+    @app.post('/api/orders/cancel')
+    @login_required_json
+    def api_cancel_order():
+        """
+        Cancel an unpaid order and restore items to cart.
+        """
+        data = request.get_json() or {}
+        order_id = data.get('order_id')
+        
+        if not order_id:
+            return jsonify({'ok': False, 'message': 'order_id_required'}), 400
+        
+        conn = get_db_connection()
+        try:
+            result = cancel_unpaid_order(conn, int(order_id), session['user_id'])
+            
+            if result['success']:
+                return jsonify({
+                    'ok': True,
+                    'message': result['message'],
+                    'items_restored': result.get('items_restored', 0)
+                })
+            else:
+                status_code = 404 if result['message'] == 'order_not_found' else 400
+                return jsonify({'ok': False, 'message': result['message']}), status_code
+                
+        finally:
+            conn.close()
+
+    @app.get('/api/orders/pending')
+    @login_required_json
+    def api_get_pending_orders():
+        """
+        Get all pending orders that need payment for the current user.
+        """
+        conn = get_db_connection()
+        try:
+            # Get pending orders with payment status
+            orders = conn.execute('''
+                SELECT 
+                    o.id,
+                    o.restaurant_id,
+                    o.total_amount,
+                    o.status as order_status,
+                    o.created_at,
+                    r.name as restaurant_name,
+                    p.status as payment_status,
+                    p.tx_ref,
+                    p.provider
+                FROM orders o
+                LEFT JOIN restaurants r ON o.restaurant_id = r.id
+                LEFT JOIN payments p ON o.id = p.order_id
+                WHERE o.user_id = ? AND o.status = 'pending'
+                ORDER BY o.created_at DESC
+            ''', (session['user_id'],)).fetchall()
+            
+            formatted_orders = []
+            for order in orders:
+                formatted_orders.append({
+                    'order_id': order[0],
+                    'restaurant_id': order[1],
+                    'total_amount': order[2],
+                    'order_status': order[3],
+                    'created_at': order[4],
+                    'restaurant_name': order[5],
+                    'payment_status': order[6] or 'initialized',
+                    'tx_ref': order[7],
+                    'payment_provider': order[8]
+                })
+            
+            return jsonify({
+                'ok': True,
+                'orders': formatted_orders
+            })
+            
+        finally:
+            conn.close()
 
     @app.post('/api/order/status')
     @owner_required_json

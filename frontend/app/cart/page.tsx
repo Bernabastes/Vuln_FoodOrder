@@ -1,6 +1,5 @@
 import { cookies } from 'next/headers'
 import PlaceOrderButton from '../../components/PlaceOrderButton'
-import BatchPlaceOrdersButton from '../../components/BatchPlaceOrdersButton'
 import RemoveFromCartButton from '../../components/RemoveFromCartButton'
 
 async function fetchCart() {
@@ -82,7 +81,7 @@ export default async function CartPage() {
             ))}
             <div className="flex items-center justify-between mt-6">
               <div className="text-sm text-gray-600">Grand Total: ${cart.total}</div>
-              <BatchPlaceOrdersButton />
+              {/* <BatchPlaceOrdersButton /> */}
             </div>
           </>
         )}

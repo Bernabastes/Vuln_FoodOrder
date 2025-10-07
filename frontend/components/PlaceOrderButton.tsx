@@ -80,7 +80,7 @@ export default function PlaceOrderButton({ restaurantId }: PlaceOrderButtonProps
           isPlacing ? 'bg-blue-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'
         }`}
       >
-        {isPlacing ? 'Placing…' : 'Place Order'}
+        {isPlacing ? 'Processing payment...' : 'Pay for this restaurant'}
       </button>
       {errorMessage && (
         <div className="text-xs text-red-700 bg-red-100 border border-red-200 rounded px-2 py-1">
