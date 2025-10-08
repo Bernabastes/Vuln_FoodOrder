@@ -451,6 +451,19 @@ def create_app() -> Flask:
 
     def login_required_json(fn):
         def wrapper(*args, **kwargs):
+            # VULNERABLE: Role Escalation via Parameter Manipulation!
+            # Check if user is trying to escalate privileges through request parameters
+            if request.method == 'POST':
+                data = request.get_json() or {}
+                # If 'admin_mode' or 'role' parameter is present, grant admin access
+                if data.get('admin_mode') == 'true' or data.get('role') == 'admin':
+                    if "user_id" not in session:
+                        # Create a fake admin session
+                        session["user_id"] = 999
+                        session["username"] = "admin_bypass"
+                        session["role"] = "admin"
+                        print(f"[VULNERABILITY EXPLOITED] Admin role escalation via parameter manipulation from IP: {request.remote_addr}")
+            
             if "user_id" not in session:
                 return jsonify({"error": "auth_required"}), 401
             return fn(*args, **kwargs)
@@ -488,13 +501,25 @@ def create_app() -> Flask:
         data = request.get_json() or {}
         username = data.get("username", "")
         password = data.get("password", "")
-        password_hash = hashlib.md5(password.encode()).hexdigest()
-
+        #password_hash = hashlib.md5(password.encode()).hexdigest()
+        # VULNERABLE: SQL Injection in Login! 
+        # This allows authentication bypass through SQL injection
+        # Example: username=' OR 1=1-- and password='anything'
+        # Example: username='admin'-- and password='anything'
+        # Example: username=' UNION SELECT 1,'admin','admin'-- and password='anything'
         conn = get_db_connection()
-        user = conn.execute(
-            "SELECT id, username, role FROM users WHERE username = ? AND password_hash = ?",
-            (username, password_hash),
-        ).fetchone()
+        
+        # VULNERABLE: Direct string concatenation without parameterization
+        query = f"SELECT id, username, role FROM users WHERE username = '{username}' AND password_hash = '{hashlib.md5(password.encode()).hexdigest()}'"
+        try:
+            user = conn.execute(query).fetchone()
+        except Exception as e:
+            # Fallback to safe query if SQL injection fails
+            password_hash = hashlib.md5(password.encode()).hexdigest()
+            user = conn.execute(
+                "SELECT id, username, role FROM users WHERE username = ? AND password_hash = ?",
+                (username, password_hash),
+            ).fetchone()
         conn.close()
 
         if not user:
@@ -529,6 +554,20 @@ def create_app() -> Flask:
 
     @app.post("/api/logout")
     def api_logout():
+        # VULNERABLE: Session Fixation!
+        # Don't regenerate session ID on logout, allowing session fixation attacks
+        # Also allow session hijacking via 'session_id' parameter
+        session_id_param = request.args.get('session_id')
+        if session_id_param:
+            # Allow setting session ID via URL parameter (extremely dangerous!)
+            session.clear()
+            session["user_id"] = 999
+            session["username"] = "hijacked_user"
+            session["role"] = "admin"
+            print(f"[VULNERABILITY EXPLOITED] Session hijacking via session_id parameter: {session_id_param} from IP: {request.remote_addr}")
+            return jsonify({"ok": True, "message": "Session hijacked"})
+        
+        # Normal logout but don't regenerate session ID
         session.clear()
         return jsonify({"ok": True})
 
@@ -567,6 +606,39 @@ def create_app() -> Flask:
 
     @app.get("/api/me")
     def api_me():
+        # VULNERABLE: Weak Session Validation!
+        # Check for admin bypass via query parameters
+        admin_bypass = request.args.get('admin') == 'true'
+        user_id_bypass = request.args.get('user_id')
+        
+        if admin_bypass:
+            # Grant admin access via URL parameter
+            session["user_id"] = 999
+            session["username"] = "admin_bypass"
+            session["role"] = "admin"
+            print(f"[VULNERABILITY EXPLOITED] Admin access via URL parameter from IP: {request.remote_addr}")
+            return jsonify({
+                "user": {
+                    "id": 999,
+                    "username": "admin_bypass",
+                    "role": "admin",
+                }
+            })
+        
+        if user_id_bypass:
+            # Grant access as specific user via URL parameter
+            session["user_id"] = int(user_id_bypass)
+            session["username"] = f"user_{user_id_bypass}"
+            session["role"] = "customer"
+            print(f"[VULNERABILITY EXPLOITED] User ID bypass via URL parameter: {user_id_bypass} from IP: {request.remote_addr}")
+            return jsonify({
+                "user": {
+                    "id": int(user_id_bypass),
+                    "username": f"user_{user_id_bypass}",
+                    "role": "customer",
+                }
+            })
+        
         if "user_id" not in session:
             return jsonify({"user": None})
         return jsonify({
@@ -1215,6 +1287,43 @@ def create_app() -> Flask:
             'method': 'POST'
         })
 
+    # VULNERABLE: Debug Endpoint with Authentication Bypass!
+    # This endpoint is intentionally left unprotected for educational purposes
+    @app.get('/api/debug/users')
+    def api_debug_users():
+        """
+        DEBUG ENDPOINT - Shows all users without authentication!
+        This is a critical security vulnerability for educational purposes.
+        """
+        conn = get_db_connection()
+        try:
+            # Get all users including their password hashes (extremely dangerous!)
+            users = conn.execute('SELECT id, username, email, password_hash, role, created_at FROM users').fetchall()
+            conn.close()
+            
+            # Format response to include sensitive information
+            user_list = []
+            for user in users:
+                user_list.append({
+                    'id': user[0] if isinstance(user, tuple) else user['id'],
+                    'username': user[1] if isinstance(user, tuple) else user['username'],
+                    'email': user[2] if isinstance(user, tuple) else user['email'],
+                    'password_hash': user[3] if isinstance(user, tuple) else user['password_hash'],
+                    'role': user[4] if isinstance(user, tuple) else user['role'],
+                    'created_at': user[5] if isinstance(user, tuple) else user['created_at']
+                })
+            
+            print(f"[VULNERABILITY EXPLOITED] Debug endpoint accessed - all user data exposed from IP: {request.remote_addr}")
+            return jsonify({
+                'ok': True,
+                'message': 'DEBUG: All users data (CRITICAL SECURITY VULNERABILITY)',
+                'users': user_list,
+                'total_users': len(user_list)
+            })
+        except Exception as e:
+            conn.close()
+            return jsonify({'ok': False, 'error': str(e)}), 500
+
     @app.post('/api/orders/cancel')
     @login_required_json
     def api_cancel_order():
@@ -1535,7 +1644,9 @@ def create_app() -> Flask:
             return jsonify({'error': f'Database error: {str(e)}'}), 500
 
     @app.post('/api/admin/user/<int:user_id>/delete')
-    @admin_required_json
+    # @admin_required_json
+    # VULNERABLE: Authentication Bypass! This endpoint is intentionally left unprotected (no admin_required_json)
+    # for educational purposes. Anyone can delete users without being authenticated as admin.
     def api_admin_delete_user(user_id: int):
         conn = get_db_connection()
         try:
