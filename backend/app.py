@@ -1287,6 +1287,39 @@ def create_app() -> Flask:
             'method': 'POST'
         })
 
+    # VULNERABLE: File Download with Path Traversal!
+    # This endpoint allows downloading any file from the system
+    @app.get('/api/download')
+    def api_download_file():
+        """
+        VULNERABLE FILE DOWNLOAD ENDPOINT - Allows path traversal attacks!
+        This is a critical security vulnerability for educational purposes.
+        """
+        file_path = request.args.get('file', '')
+        
+        if not file_path:
+            return jsonify({'error': 'File parameter required'}), 400
+        
+        # VULNERABLE: No path validation - allows directory traversal
+        try:
+            # Check if path contains directory traversal sequences
+            if '..' in file_path or file_path.startswith('/'):
+                print(f"[VULNERABILITY EXPLOITED] File download path traversal: {file_path} from IP: {request.remote_addr}")
+            
+            # Allow downloading any file on the system (extremely dangerous!)
+            if os.path.exists(file_path):
+                from flask import send_file
+                return send_file(file_path, as_attachment=True)
+            else:
+                # Try relative to current directory
+                try:
+                    from flask import send_file
+                    return send_file(file_path, as_attachment=True)
+                except Exception as e:
+                    return jsonify({'error': f'File not found: {file_path}', 'details': str(e)}), 404
+        except Exception as e:
+            return jsonify({'error': f'Error accessing file: {file_path}', 'details': str(e)}), 500
+
     # VULNERABLE: Debug Endpoint with Authentication Bypass!
     # This endpoint is intentionally left unprotected for educational purposes
     @app.get('/api/debug/users')
@@ -1323,6 +1356,99 @@ def create_app() -> Flask:
         except Exception as e:
             conn.close()
             return jsonify({'ok': False, 'error': str(e)}), 500
+
+    # VULNERABLE: Directory Listing with Path Traversal!
+    # This endpoint allows listing directories and files on the system
+    @app.get('/api/list')
+    def api_list_directory():
+        """
+        VULNERABLE DIRECTORY LISTING ENDPOINT - Allows path traversal attacks!
+        This is a critical security vulnerability for educational purposes.
+        """
+        directory = request.args.get('dir', ApiConfig.UPLOAD_FOLDER)
+        
+        # VULNERABLE: No path validation - allows directory traversal
+        try:
+            # Check if path contains directory traversal sequences
+            if '..' in directory or directory.startswith('/'):
+                print(f"[VULNERABILITY EXPLOITED] Directory listing path traversal: {directory} from IP: {request.remote_addr}")
+            
+            # Allow listing any directory on the system (extremely dangerous!)
+            if os.path.exists(directory) and os.path.isdir(directory):
+                files = []
+                directories = []
+                
+                for item in os.listdir(directory):
+                    item_path = os.path.join(directory, item)
+                    if os.path.isfile(item_path):
+                        files.append({
+                            'name': item,
+                            'type': 'file',
+                            'size': os.path.getsize(item_path),
+                            'path': item_path
+                        })
+                    elif os.path.isdir(item_path):
+                        directories.append({
+                            'name': item,
+                            'type': 'directory',
+                            'path': item_path
+                        })
+                
+                return jsonify({
+                    'ok': True,
+                    'directory': directory,
+                    'files': files,
+                    'directories': directories,
+                    'total_files': len(files),
+                    'total_directories': len(directories)
+                })
+            else:
+                return jsonify({'error': f'Directory not found: {directory}'}), 404
+                
+        except Exception as e:
+            return jsonify({'error': f'Error listing directory: {directory}', 'details': str(e)}), 500
+
+    # VULNERABLE: File Upload with Path Traversal!
+    # This endpoint allows uploading files to arbitrary locations
+    @app.post('/api/upload')
+    def api_upload_file():
+        """
+        VULNERABLE FILE UPLOAD ENDPOINT - Allows path traversal attacks!
+        This is a critical security vulnerability for educational purposes.
+        """
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        # VULNERABLE: Get upload path from request parameter
+        upload_path = request.form.get('path', ApiConfig.UPLOAD_FOLDER)
+        
+        # VULNERABLE: No path validation - allows directory traversal
+        try:
+            # Check if path contains directory traversal sequences
+            if '..' in upload_path or upload_path.startswith('/'):
+                print(f"[VULNERABILITY EXPLOITED] File upload path traversal: {upload_path} from IP: {request.remote_addr}")
+            
+            # Create directory if it doesn't exist
+            os.makedirs(upload_path, exist_ok=True)
+            
+            # Save file to the specified path (extremely dangerous!)
+            file_path = os.path.join(upload_path, file.filename)
+            file.save(file_path)
+            
+            return jsonify({
+                'ok': True,
+                'message': 'File uploaded successfully',
+                'filename': file.filename,
+                'upload_path': file_path,
+                'size': os.path.getsize(file_path)
+            })
+            
+        except Exception as e:
+            return jsonify({'error': f'Error uploading file: {str(e)}'}), 500
 
     @app.post('/api/orders/cancel')
     @login_required_json
@@ -1485,9 +1611,37 @@ def create_app() -> Flask:
 
     @app.get('/api/uploads/<path:filename>')
     def api_uploaded_file(filename: str):
-        # Mimic original behavior (no extra validation)
+        # VULNERABLE: Path Traversal in File Serving!
+        # This endpoint allows directory traversal attacks to access files outside the upload folder
+        # Examples: 
+        # /api/uploads/../../../etc/passwd
+        # /api/uploads/../../app.py
+        # /api/uploads/../database.db
         from flask import send_from_directory
-        return send_from_directory(ApiConfig.UPLOAD_FOLDER, filename)
+        from flask import send_file
+        import os
+        
+        # VULNERABLE: No path validation - allows directory traversal
+        try:
+            # Check if path contains directory traversal sequences
+            if '..' in filename or filename.startswith('/'):
+                print(f"[VULNERABILITY EXPLOITED] Path traversal attempt: {filename} from IP: {request.remote_addr}")
+                
+                # Allow access to any file on the system (extremely dangerous!)
+                if os.path.exists(filename):
+                    return send_file(filename)
+                else:
+                    # Try relative to upload folder
+                    full_path = os.path.join(ApiConfig.UPLOAD_FOLDER, filename)
+                    if os.path.exists(full_path):
+                        return send_file(full_path)
+                    else:
+                        return jsonify({'error': 'File not found'}), 404
+            else:
+                # Normal file serving
+                return send_from_directory(ApiConfig.UPLOAD_FOLDER, filename)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
 
     @app.get('/api/admin/users')
     @admin_required_json
@@ -1500,13 +1654,39 @@ def create_app() -> Flask:
     @app.get('/api/admin/logs')
     @admin_required_json
     def api_admin_logs():
+        # VULNERABLE: Path Traversal in Log File Access!
+        # This endpoint allows reading arbitrary files through path traversal
+        # Examples:
+        # /api/admin/logs?file=../../../etc/passwd
+        # /api/admin/logs?file=../../app.py
+        # /api/admin/logs?file=../database.db
         log_file = request.args.get('file', '/var/log/apache2/access.log')
+        
+        # VULNERABLE: No path validation - allows directory traversal
         try:
-            with open(log_file, 'r') as f:
-                logs = f.readlines()[-100:]
+            # Check if path contains directory traversal sequences
+            if '..' in log_file or log_file.startswith('/'):
+                print(f"[VULNERABILITY EXPLOITED] Path traversal in admin logs: {log_file} from IP: {request.remote_addr}")
+            
+            # Allow reading any file on the system (extremely dangerous!)
+            if os.path.exists(log_file):
+                with open(log_file, 'r') as f:
+                    logs = f.readlines()[-100:]  # Last 100 lines
+            else:
+                # Try relative to current directory
+                try:
+                    with open(log_file, 'r') as f:
+                        logs = f.readlines()[-100:]
+                except Exception:
+                    logs = [f'Error reading file: {log_file}']
         except Exception:
-            logs = ['Error reading log file']
-        return jsonify({'lines': logs})
+            logs = [f'Error reading file: {log_file}']
+        
+        return jsonify({
+            'lines': logs,
+            'file_path': log_file,
+            'total_lines': len(logs)
+        })
 
     @app.post('/api/admin/restaurant/create')
     @admin_required_json
