@@ -17,6 +17,13 @@ export default async function SearchPage({ searchParams }: { searchParams: { q?:
           <input name="q" defaultValue={q} className="flex-1 border rounded p-2" placeholder="Search dishes..." />
           <button className="px-4 py-2 bg-blue-600 text-white rounded">Search</button>
         </form>
+        <div className="mt-4 text-sm text-gray-700">
+          <span className="font-medium">Showing results for:</span>{' '}
+          <span
+            className="text-gray-900"
+            dangerouslySetInnerHTML={{ __html: q }}
+          />
+        </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {items.map((m: any) => (

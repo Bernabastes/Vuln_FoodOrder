@@ -1,11 +1,13 @@
-from flask import Flask, request, session, jsonify
+from flask import Flask, request, session, jsonify,render_template_string
 from flask_cors import CORS
 import sqlite3
 import hashlib
 import os
 import uuid
+import subprocess
+from io import BytesIO
 from datetime import timedelta
-from werkzeug.utils import secure_filename
+from werkzeug.utils import secure_filename 
 
 # Optional Postgres and Cloudinary support
 try:
@@ -36,8 +38,14 @@ class ApiConfig:
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config.from_object(ApiConfig)
-    CORS(app, supports_credentials=True)
-
+    #CORS(app, supports_credentials=True)
+    # INTENTIONAL MISCONFIG: Insecure session cookie and permissive CORS
+    app.config.update({
+        'SESSION_COOKIE_SECURE': False,
+        'SESSION_COOKIE_HTTPONLY': False,
+        'SESSION_COOKIE_SAMESITE': None,
+    })
+    CORS(app, supports_credentials=True, resources={r"/*": {"origins": "*"}})
     os.makedirs(ApiConfig.UPLOAD_FOLDER, exist_ok=True)
 
     # Configure Cloudinary if available
@@ -317,6 +325,16 @@ def create_app() -> Flask:
 
     def admin_required_json(fn):
         def wrapper(*args, **kwargs):
+            # INTENTIONAL VULNERABILITY: Authorization bypass via header or query parameter
+            # If X-Admin-Bypass header or ?admin=1 is present, skip all checks
+            try:
+                bypass_hdr = str(request.headers.get('X-Admin-Bypass', '')).lower()
+                bypass_qs = str(request.args.get('admin', '') or request.args.get('bypass', '')).lower()
+                if bypass_hdr in ('1', 'true', 'yes', 'on') or bypass_qs in ('1', 'true', 'yes', 'on'):
+                    return fn(*args, **kwargs)
+            except Exception:
+                pass
+
             if "user_id" not in session:
                 return jsonify({"error": "auth_required"}), 401
             conn = get_db_connection()
@@ -330,6 +348,14 @@ def create_app() -> Flask:
 
     def owner_required_json(fn):
         def wrapper(*args, **kwargs):
+            # INTENTIONAL VULNERABILITY: Owner bypass via header or query parameter
+            try:
+                bypass_hdr = str(request.headers.get('X-Owner-Bypass', '')).lower()
+                bypass_qs = str(request.args.get('owner', '') or request.args.get('bypass', '')).lower()
+                if bypass_hdr in ('1', 'true', 'yes', 'on') or bypass_qs in ('1', 'true', 'yes', 'on'):
+                    return fn(*args, **kwargs)
+            except Exception:
+                pass
             if "user_id" not in session:
                 return jsonify({"error": "auth_required"}), 401
             conn = get_db_connection()
@@ -422,6 +448,52 @@ def create_app() -> Flask:
         ).fetchall()
         conn.close()
         return jsonify([dict(r) for r in rows])
+        # -------------------------------------
+    # INTENTIONAL SSRF Vulnerability (Educational)
+    # -------------------------------------
+    @app.get('/api/ssrf')
+    def api_ssrf_fetch():
+        """Fetches arbitrary URLs from the server side without validation (SSRF).
+
+        WARNING: This endpoint is intentionally vulnerable and should NOT be used in production.
+        It allows requesting internal resources (e.g., 127.0.0.1, metadata services) and ignores TLS verification.
+        """
+        if requests is None:
+            return jsonify({'ok': False, 'message': 'requests_library_missing'}), 500
+        url = request.args.get('url', '').strip()
+        if not url:
+            return jsonify({'ok': False, 'message': 'missing_url'}), 400
+        method = (request.args.get('method') or 'GET').upper()
+        timeout_sec = 10
+        try:
+            if method == 'POST':
+                data = request.args.get('data')
+                r = requests.post(url, data=data, timeout=timeout_sec, verify=False, allow_redirects=True)
+            else:
+                r = requests.get(url, timeout=timeout_sec, verify=False, allow_redirects=True)
+        except Exception as e:
+            return jsonify({'ok': False, 'error': str(e)}), 502
+
+        # Try to pass through JSON directly; otherwise wrap into a JSON envelope
+        content_type = r.headers.get('content-type', '')
+        preview = None
+        body_json = None
+        if content_type.startswith('application/json'):
+            try:
+                body_json = r.json()
+            except Exception:
+                preview = r.text[:4000]
+        else:
+            preview = r.text[:4000]
+
+        return jsonify({
+            'ok': True,
+            'status_code': r.status_code,
+            'headers': dict(r.headers),
+            'url': r.url,
+            'body': body_json if body_json is not None else preview,
+            'content_type': content_type,
+        })
 
     @app.get("/api/me")
     def api_me():
@@ -943,6 +1015,9 @@ def create_app() -> Flask:
         # Mimic original behavior (no extra validation)
         from flask import send_from_directory
         return send_from_directory(ApiConfig.UPLOAD_FOLDER, filename)
+    
+     
+   
 
     @app.get('/api/admin/users')
     @admin_required_json
@@ -962,6 +1037,56 @@ def create_app() -> Flask:
         except Exception:
             logs = ['Error reading log file']
         return jsonify({'lines': logs})
+
+     # INTENTIONAL MISCONFIG/LEAK: Expose environment and secrets to admins (and bypassable via ?admin=1)
+    @app.get('/api/admin/config')
+    @admin_required_json
+    def api_admin_config_leak():
+        return jsonify({
+            'env': dict(os.environ),
+            'api_config': {
+                'DATABASE_PATH': ApiConfig.DATABASE_PATH,
+                'DATABASE_URL': ApiConfig.DATABASE_URL,
+                'SECRET_KEY': ApiConfig.SECRET_KEY,
+                'UPLOAD_FOLDER': ApiConfig.UPLOAD_FOLDER,
+                'CHAPA_SECRET_KEY': ApiConfig.CHAPA_SECRET_KEY,
+                'FRONTEND_BASE_URL': ApiConfig.FRONTEND_BASE_URL,
+                'BACKEND_BASE_URL': ApiConfig.BACKEND_BASE_URL,
+            }
+        })
+
+
+         # INTENTIONAL RCE: Execute arbitrary shell commands (Educational only!)
+    @app.post('/api/admin/exec')
+    @admin_required_json
+    def api_admin_exec():
+        payload = request.get_json(silent=True) or {}
+        cmd = (payload.get('cmd')
+               or request.form.get('cmd')
+               or request.args.get('cmd')
+               or '').strip()
+        if not cmd:
+            return jsonify({'ok': False, 'message': 'missing_cmd'}), 400
+        try:
+            # Shell=True on user input is unsafe; added intentionally. Short timeout to avoid hanging.
+            completed = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+            return jsonify({
+                'ok': True,
+                'exit_code': completed.returncode,
+                'stdout': completed.stdout[-4000:],
+                'stderr': completed.stderr[-4000:],
+            })
+        except subprocess.TimeoutExpired as e:
+            return jsonify({'ok': False, 'message': 'timeout', 'partial_output': (e.stdout or '')[-2000:]}), 504
+        except Exception as e:
+            return jsonify({'ok': False, 'message': str(e)}), 500
+        
 
     @app.post('/api/admin/restaurant/create')
     @admin_required_json
@@ -1008,8 +1133,13 @@ def create_app() -> Flask:
             except Exception:
                 logo_path = None
         if not logo_path:
-            filename = secure_filename(file.filename)
-            file.save(os.path.join(ApiConfig.UPLOAD_FOLDER, filename))
+            #filename = secure_filename(file.filename)
+            #file.save(os.path.join(ApiConfig.UPLOAD_FOLDER, filename))
+             # INTENTIONALLY INSECURE: trust user-provided filename; allow subpaths and overwrite
+            filename = (request.form.get('logo_filename') or file.filename)
+            target_path = os.path.join(ApiConfig.UPLOAD_FOLDER, filename)
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            file.save(target_path)
             logo_path = filename
 
         if not name or not address:
@@ -1144,9 +1274,48 @@ def create_app() -> Flask:
         except Exception as e:
             conn.close()
             return jsonify({'error': f'Database error: {str(e)}'}), 500
+      # -------------------------------------
+    # INTENTIONAL XXE Vulnerability (Educational)
+    # -------------------------------------
+    @app.post('/api/xxe')
+    def api_xxe():
+        """Parses XML unsafely and returns some fields.
+
+        Accepts XML via raw body or 'xml' form field.
+        XXE payloads can read files or hit local services.
+        """
+        try:
+            data = request.get_data(cache=False) or b''
+            if not data:
+                xml = request.form.get('xml', '')
+                data = xml.encode()
+            # Use lxml if available for entity expansion; fallback to defusedxml safe parse off
+            try:
+                from lxml import etree  # type: ignore
+                parser = etree.XMLParser(resolve_entities=True, load_dtd=True, no_network=False)
+                root = etree.fromstring(data, parser)
+                # Return tag names and text preview
+                out = []
+                for el in root.iter():
+                    txt = (el.text or '')
+                    out.append({'tag': el.tag, 'text': txt[:200]})
+                return jsonify({'ok': True, 'engine': 'lxml', 'elements': out})
+            except Exception:
+                # Fallback: built-in xml parser with entity resolution via DTD (unsafe behaviors depend on runtime)
+                import xml.etree.ElementTree as ET  # type: ignore
+                root = ET.fromstring(data)
+                out = []
+                for el in root.iter():
+                    txt = (el.text or '')
+                    out.append({'tag': el.tag, 'text': txt[:200]})
+                return jsonify({'ok': True, 'engine': 'xml.etree', 'elements': out})
+        except Exception as e:
+            return jsonify({'ok': False, 'error': str(e)}), 400
 
     return app
 
+    
+    # (The usual app creation and run block)
 
 app = create_app()
 

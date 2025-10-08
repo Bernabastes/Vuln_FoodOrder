@@ -56,7 +56,7 @@ export default function RestaurantPage({
     })
     const base =
       process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
-    const { quantity = 1 } = formStates[menuItemId] || {}
+      const { quantity = 1, special = '' } = formStates[menuItemId] || {}
     const res = await fetch(`${base}/api/cart/add`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -64,6 +64,7 @@ export default function RestaurantPage({
       body: JSON.stringify({
         menu_item_id: menuItemId,
         quantity,
+        special_instructions: special,
       }),
     })
     updateFormState(menuItemId, { saving: false })
@@ -187,7 +188,18 @@ export default function RestaurantPage({
                             quantity: Math.max(1, Number(e.target.value)),
                           })
                         }
-                        className="w-20 border rounded-lg p-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+                        className="w-10 border rounded-lg p-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Special instructions"
+                        value={form.special || ''}
+                        onChange={(e) =>
+                          updateFormState(m.id, {
+                            special: e.target.value,
+                          })
+                        }
+                        className="flex-1 border rounded-lg p-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-green-400"
                       />
                       <button
                         onClick={() => handleAddToCart(m.id)}
