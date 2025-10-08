@@ -702,6 +702,8 @@ def create_app() -> Flask:
                 'restaurants': [dict(r) for r in restaurants],
             })
 
+    # VULNERABLE: This endpoint is intentionally left without CSRF protection (no CSRF token, no Origin/Referer check)
+    # for educational purposes. It is vulnerable to Cross-Site Request Forgery (CSRF) attacks.
     @app.post('/api/cart/add')
     @login_required_json
     def api_cart_add():
@@ -788,6 +790,8 @@ def create_app() -> Flask:
         finally:
             conn.close()
 
+    # VULNERABLE: This endpoint is intentionally left without CSRF protection (no CSRF token, no Origin/Referer check)
+    # for educational purposes. It is vulnerable to Cross-Site Request Forgery (CSRF) attacks.
     @app.post('/api/orders/place')
     @login_required_json
     def api_place_order():
