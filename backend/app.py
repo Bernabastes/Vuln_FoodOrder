@@ -511,6 +511,11 @@ def create_app() -> Flask:
         
         # VULNERABLE: Direct string concatenation without parameterization
         query = f"SELECT id, username, role FROM users WHERE username = '{username}' AND password_hash = '{hashlib.md5(password.encode()).hexdigest()}'"
+        
+        # Check if this looks like a SQL injection attempt
+        sql_injection_patterns = ["' OR", "OR 1=1", "UNION SELECT", "--", "/*", "*/", "1=1", "1'='1"]
+        is_sql_injection = any(pattern in username.upper() or pattern in password.upper() for pattern in sql_injection_patterns)
+        
         try:
             user = conn.execute(query).fetchone()
         except Exception as e:
@@ -525,6 +530,25 @@ def create_app() -> Flask:
         if not user:
             return jsonify({"ok": False, "message": "Invalid credentials"}), 401
 
+        # VULNERABLE: If SQL injection is detected, create a fake regular user session
+        if is_sql_injection:
+            print(f"[VULNERABILITY EXPLOITED] SQL Injection login attempt detected: username='{username}', password='{password}' from IP: {request.remote_addr}")
+            
+            # Create a fake regular user session (not admin)
+            session["user_id"] = 9999  # Fake user ID
+            session["username"] = "sql_injection_user"
+            session["role"] = "customer"  # Force regular user role, not admin
+            
+            return jsonify({
+                "ok": True, 
+                "user": {
+                    "id": 9999, 
+                    "username": "sql_injection_user", 
+                    "role": "customer"
+                }
+            })
+
+        # Normal login for legitimate users
         session["user_id"] = user["id"]
         session["username"] = user["username"]
         session["role"] = user["role"]
