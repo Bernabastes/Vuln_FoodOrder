@@ -649,6 +649,43 @@ def create_app() -> Flask:
             }
         })
 
+    # VULNERABLE: Insecure Direct Object Reference - User Profile Access!
+    # This endpoint allows accessing any user's profile without proper authorization
+    @app.get('/api/user/<int:user_id>/profile')
+    @login_required_json
+    def api_user_profile(user_id: int):
+        """
+        VULNERABLE USER PROFILE ENDPOINT - IDOR vulnerability!
+        This allows accessing any user's profile without proper authorization.
+        """
+        conn = get_db_connection()
+        try:
+            # VULNERABLE: No authorization check - any authenticated user can access any profile
+            user = conn.execute('''
+                SELECT id, username, email, role, created_at 
+                FROM users WHERE id = ?
+            ''', (user_id,)).fetchone()
+            
+            if not user:
+                conn.close()
+                return jsonify({'error': 'User not found'}), 404
+            
+            # VULNERABLE: Return sensitive user information without checking if requester has permission
+            print(f"[VULNERABILITY EXPLOITED] IDOR - User {session.get('user_id')} accessed profile of user {user_id} from IP: {request.remote_addr}")
+            
+            return jsonify({
+                'ok': True,
+                'user': {
+                    'id': user[0] if isinstance(user, tuple) else user['id'],
+                    'username': user[1] if isinstance(user, tuple) else user['username'],
+                    'email': user[2] if isinstance(user, tuple) else user['email'],
+                    'role': user[3] if isinstance(user, tuple) else user['role'],
+                    'created_at': user[4] if isinstance(user, tuple) else user['created_at']
+                }
+            })
+        finally:
+            conn.close()
+
     @app.get("/api/dashboard")
     @login_required_json
     def api_dashboard():
@@ -1408,6 +1445,66 @@ def create_app() -> Flask:
         except Exception as e:
             return jsonify({'error': f'Error listing directory: {directory}', 'details': str(e)}), 500
 
+    # VULNERABLE: Insecure Direct Object Reference - Order Details Access!
+    # This endpoint allows accessing any user's order details without proper authorization
+    @app.get('/api/order/<int:order_id>/details')
+    @login_required_json
+    def api_order_details(order_id: int):
+        """
+        VULNERABLE ORDER DETAILS ENDPOINT - IDOR vulnerability!
+        This allows accessing any user's order details without proper authorization.
+        """
+        conn = get_db_connection()
+        try:
+            # VULNERABLE: No authorization check - any authenticated user can access any order
+            order = conn.execute('''
+                SELECT o.*, u.username, r.name as restaurant_name
+                FROM orders o
+                JOIN users u ON o.user_id = u.id
+                JOIN restaurants r ON o.restaurant_id = r.id
+                WHERE o.id = ?
+            ''', (order_id,)).fetchone()
+            
+            if not order:
+                conn.close()
+                return jsonify({'error': 'Order not found'}), 404
+            
+            # Get order items
+            items = conn.execute('''
+                SELECT oi.*, mi.name, mi.price
+                FROM order_items oi
+                JOIN menu_items mi ON oi.menu_item_id = mi.id
+                WHERE oi.order_id = ?
+            ''', (order_id,)).fetchall()
+            
+            # Get payment information
+            payment = conn.execute('''
+                SELECT * FROM payments WHERE order_id = ?
+            ''', (order_id,)).fetchone()
+            
+            # VULNERABLE: Return sensitive order information without checking ownership
+            print(f"[VULNERABILITY EXPLOITED] IDOR - User {session.get('user_id')} accessed order {order_id} from IP: {request.remote_addr}")
+            
+            order_data = {
+                'id': order[0] if isinstance(order, tuple) else order['id'],
+                'user_id': order[1] if isinstance(order, tuple) else order['user_id'],
+                'restaurant_id': order[2] if isinstance(order, tuple) else order['restaurant_id'],
+                'total_amount': order[3] if isinstance(order, tuple) else order['total_amount'],
+                'status': order[4] if isinstance(order, tuple) else order['status'],
+                'created_at': order[5] if isinstance(order, tuple) else order['created_at'],
+                'username': order[6] if isinstance(order, tuple) else order['username'],
+                'restaurant_name': order[7] if isinstance(order, tuple) else order['restaurant_name'],
+                'items': [dict(item) for item in items],
+                'payment': dict(payment) if payment else None
+            }
+            
+            return jsonify({
+                'ok': True,
+                'order': order_data
+            })
+        finally:
+            conn.close()
+
     # VULNERABLE: File Upload with Path Traversal!
     # This endpoint allows uploading files to arbitrary locations
     @app.post('/api/upload')
@@ -1449,6 +1546,229 @@ def create_app() -> Flask:
             
         except Exception as e:
             return jsonify({'error': f'Error uploading file: {str(e)}'}), 500
+
+    # VULNERABLE: Insecure Direct Object Reference - Payment Details Access!
+    # This endpoint allows accessing any user's payment details without proper authorization
+    @app.get('/api/payment/<tx_ref>/details')
+    @login_required_json
+    def api_payment_details(tx_ref: str):
+        """
+        VULNERABLE PAYMENT DETAILS ENDPOINT - IDOR vulnerability!
+        This allows accessing any user's payment details without proper authorization.
+        """
+        if not tx_ref:
+            return jsonify({'error': 'Transaction reference required'}), 400
+
+        conn = get_db_connection()
+        try:
+            # VULNERABLE: No authorization check - any authenticated user can access any payment
+            payment = conn.execute('''
+                SELECT p.*, o.user_id, o.total_amount, o.status as order_status, u.username
+                FROM payments p
+                JOIN orders o ON p.order_id = o.id
+                JOIN users u ON o.user_id = u.id
+                WHERE p.tx_ref = ?
+            ''', (tx_ref,)).fetchone()
+            
+            if not payment:
+                conn.close()
+                return jsonify({'error': 'Payment not found'}), 404
+            
+            # VULNERABLE: Return sensitive payment information without checking ownership
+            print(f"[VULNERABILITY EXPLOITED] IDOR - User {session.get('user_id')} accessed payment {tx_ref} from IP: {request.remote_addr}")
+            
+            payment_data = {
+                'tx_ref': payment[5] if isinstance(payment, tuple) else payment['tx_ref'],
+                'order_id': payment[1] if isinstance(payment, tuple) else payment['order_id'],
+                'provider': payment[2] if isinstance(payment, tuple) else payment['provider'],
+                'amount': payment[3] if isinstance(payment, tuple) else payment['amount'],
+                'currency': payment[4] if isinstance(payment, tuple) else payment['currency'],
+                'status': payment[5] if isinstance(payment, tuple) else payment['status'],
+                'created_at': payment[6] if isinstance(payment, tuple) else payment['created_at'],
+                'user_id': payment[7] if isinstance(payment, tuple) else payment['user_id'],
+                'total_amount': payment[8] if isinstance(payment, tuple) else payment['total_amount'],
+                'order_status': payment[9] if isinstance(payment, tuple) else payment['order_status'],
+                'username': payment[10] if isinstance(payment, tuple) else payment['username']
+            }
+            
+            return jsonify({
+                'ok': True,
+                'payment': payment_data
+            })
+            
+        finally:
+            conn.close()
+
+    # VULNERABLE: Insecure Direct Object Reference - User Cart Access!
+    # This endpoint allows accessing any user's cart without proper authorization
+    @app.get('/api/user/<int:user_id>/cart')
+    @login_required_json
+    def api_user_cart(user_id: int):
+        """
+        VULNERABLE USER CART ENDPOINT - IDOR vulnerability!
+        This allows accessing any user's cart without proper authorization.
+        """
+        conn = get_db_connection()
+        try:
+            # VULNERABLE: No authorization check - any authenticated user can access any cart
+            rows = conn.execute('''
+                SELECT ci.id as cart_item_id, ci.menu_item_id, ci.quantity, ci.special_instructions, 
+                       mi.*, r.name as restaurant_name, u.username
+                FROM cart_items ci
+                JOIN menu_items mi ON ci.menu_item_id = mi.id
+                JOIN restaurants r ON mi.restaurant_id = r.id
+                JOIN users u ON ci.user_id = u.id
+                WHERE ci.user_id = ?
+            ''', (user_id,)).fetchall()
+            
+            items = []
+            total = 0
+            for r in rows:
+                menu_item = dict(r)
+                menu_item['restaurant_name'] = menu_item.pop('restaurant_name', '')
+                menu_item['username'] = menu_item.pop('username', '')
+                qty = int(menu_item.pop('quantity' if 'quantity' in menu_item else 'ci.quantity', 1))
+                special = menu_item.pop('special_instructions' if 'special_instructions' in menu_item else 'ci.special_instructions', '')
+                item_total = float(menu_item['price']) * qty
+                total += item_total
+                items.append({
+                    'cart_item_id': menu_item.pop('cart_item_id' if 'cart_item_id' in menu_item else 'ci.cart_item_id', None),
+                    'menu_item': menu_item,
+                    'quantity': qty,
+                    'special_instructions': special,
+                    'total': item_total,
+                })
+            
+            # VULNERABLE: Return sensitive cart information without checking ownership
+            print(f"[VULNERABILITY EXPLOITED] IDOR - User {session.get('user_id')} accessed cart of user {user_id} from IP: {request.remote_addr}")
+            
+            return jsonify({
+                'ok': True,
+                'user_id': user_id,
+                'items': items,
+                'total': total,
+                'total_items': len(items)
+            })
+        finally:
+            conn.close()
+
+    # VULNERABLE: Insecure Direct Object Reference - Restaurant Management!
+    # This endpoint allows restaurant owners to access other restaurants' data
+    @app.get('/api/restaurant/<int:restaurant_id>/manage')
+    @owner_required_json
+    def api_restaurant_manage(restaurant_id: int):
+        """
+        VULNERABLE RESTAURANT MANAGEMENT ENDPOINT - IDOR vulnerability!
+        This allows restaurant owners to access other restaurants' data.
+        """
+        conn = get_db_connection()
+        try:
+            # VULNERABLE: No proper authorization check - owners can access any restaurant
+            restaurant = conn.execute('''
+                SELECT r.*, u.username as owner_username, u.email as owner_email
+                FROM restaurants r
+                JOIN users u ON r.owner_id = u.id
+                WHERE r.id = ?
+            ''', (restaurant_id,)).fetchone()
+            
+            if not restaurant:
+                conn.close()
+                return jsonify({'error': 'Restaurant not found'}), 404
+            
+            # Get restaurant menu items
+            menu_items = conn.execute('''
+                SELECT * FROM menu_items WHERE restaurant_id = ?
+            ''', (restaurant_id,)).fetchall()
+            
+            # Get restaurant orders
+            orders = conn.execute('''
+                SELECT o.*, u.username FROM orders o
+                JOIN users u ON o.user_id = u.id
+                WHERE o.restaurant_id = ?
+                ORDER BY o.created_at DESC
+            ''', (restaurant_id,)).fetchall()
+            
+            # VULNERABLE: Return sensitive restaurant data without checking if user owns it
+            print(f"[VULNERABILITY EXPLOITED] IDOR - User {session.get('user_id')} accessed restaurant {restaurant_id} management from IP: {request.remote_addr}")
+            
+            restaurant_data = {
+                'id': restaurant[0] if isinstance(restaurant, tuple) else restaurant['id'],
+                'owner_id': restaurant[1] if isinstance(restaurant, tuple) else restaurant['owner_id'],
+                'name': restaurant[2] if isinstance(restaurant, tuple) else restaurant['name'],
+                'address': restaurant[3] if isinstance(restaurant, tuple) else restaurant['address'],
+                'logo_path': restaurant[4] if isinstance(restaurant, tuple) else restaurant['logo_path'],
+                'created_at': restaurant[5] if isinstance(restaurant, tuple) else restaurant['created_at'],
+                'owner_username': restaurant[6] if isinstance(restaurant, tuple) else restaurant['owner_username'],
+                'owner_email': restaurant[7] if isinstance(restaurant, tuple) else restaurant['owner_email'],
+                'menu_items': [dict(item) for item in menu_items],
+                'orders': [dict(order) for order in orders],
+                'total_menu_items': len(menu_items),
+                'total_orders': len(orders)
+            }
+            
+            return jsonify({
+                'ok': True,
+                'restaurant': restaurant_data
+            })
+        finally:
+            conn.close()
+
+    # VULNERABLE: Insecure Direct Object Reference - User Orders Access!
+    # This endpoint allows accessing any user's orders without proper authorization
+    @app.get('/api/user/<int:user_id>/orders')
+    @login_required_json
+    def api_user_orders(user_id: int):
+        """
+        VULNERABLE USER ORDERS ENDPOINT - IDOR vulnerability!
+        This allows accessing any user's orders without proper authorization.
+        """
+        conn = get_db_connection()
+        try:
+            # VULNERABLE: No authorization check - any authenticated user can access any user's orders
+            orders = conn.execute('''
+                SELECT o.*, r.name as restaurant_name, u.username
+                FROM orders o
+                JOIN restaurants r ON o.restaurant_id = r.id
+                JOIN users u ON o.user_id = u.id
+                WHERE o.user_id = ?
+                ORDER BY o.created_at DESC
+            ''', (user_id,)).fetchall()
+            
+            # Get payment information for each order
+            orders_list = []
+            for order in orders:
+                order_dict = dict(order)
+                payment = conn.execute('''
+                    SELECT * FROM payments WHERE order_id = ?
+                ''', (order_dict['id'],)).fetchone()
+                
+                if payment:
+                    order_dict['payment'] = dict(payment)
+                else:
+                    order_dict['payment'] = None
+                
+                # Get order items
+                items = conn.execute('''
+                    SELECT oi.*, mi.name, mi.price
+                    FROM order_items oi
+                    JOIN menu_items mi ON oi.menu_item_id = mi.id
+                    WHERE oi.order_id = ?
+                ''', (order_dict['id'],)).fetchall()
+                
+                order_dict['items'] = [dict(item) for item in items]
+                orders_list.append(order_dict)
+            
+            # VULNERABLE: Return sensitive order information without checking ownership
+            print(f"[VULNERABILITY EXPLOITED] IDOR - User {session.get('user_id')} accessed orders of user {user_id} from IP: {request.remote_addr}")
+            
+            return jsonify({
+                'ok': True,
+                'user_id': user_id,
+                'orders': orders_list,
+                'total_orders': len(orders_list)
+            })
+        finally:
+            conn.close()
 
     @app.post('/api/orders/cancel')
     @login_required_json
