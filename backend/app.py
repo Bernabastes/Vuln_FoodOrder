@@ -1957,33 +1957,27 @@ def create_app() -> Flask:
     def api_uploaded_file(filename: str):
         # VULNERABLE: Path Traversal in File Serving!
         # This endpoint allows directory traversal attacks to access files outside the upload folder
-        # Examples: 
-        # /api/uploads/../../../etc/passwd
-        # /api/uploads/../../app.py
-        # /api/uploads/../database.db
-        from flask import send_from_directory
-        from flask import send_file
+        # Enhanced: Always allows path traversal, so exploitation always works.
+        from flask import send_from_directory, send_file
         import os
         
-        # VULNERABLE: No path validation - allows directory traversal
         try:
-            # Check if path contains directory traversal sequences
-            if '..' in filename or filename.startswith('/'):
+            # If path traversal or absolute path is detected, use raw send_file
+            if '..' in filename or '/' in filename or filename.startswith('/'):
                 print(f"[VULNERABILITY EXPLOITED] Path traversal attempt: {filename} from IP: {request.remote_addr}")
-                
-                # Allow access to any file on the system (extremely dangerous!)
                 if os.path.exists(filename):
                     return send_file(filename)
-                else:
-                    # Try relative to upload folder
-                    full_path = os.path.join(ApiConfig.UPLOAD_FOLDER, filename)
-                    if os.path.exists(full_path):
-                        return send_file(full_path)
-                    else:
-                        return jsonify({'error': 'File not found'}), 404
+                abs_path = os.path.abspath(filename)
+                if os.path.exists(abs_path):
+                    return send_file(abs_path)
+                # Try relative to UPLOAD_FOLDER
+                full_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+                if os.path.exists(full_path):
+                    return send_file(full_path)
+                return jsonify({'error': 'File not found'}), 404
             else:
-                # Normal file serving
-                return send_from_directory(ApiConfig.UPLOAD_FOLDER, filename)
+                # Default: same (no traversal)
+                return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
