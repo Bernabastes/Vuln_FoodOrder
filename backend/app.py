@@ -2146,57 +2146,6 @@ def create_app() -> Flask:
             return jsonify({'ok': False, 'message': 'timeout', 'partial_output': (e.stdout or '')[-2000:]}), 504
         except Exception as e:
             return jsonify({'ok': False, 'message': str(e)}), 500
-        
-
-     # INTENTIONAL MISCONFIG/LEAK: Expose environment and secrets to admins (and bypassable via ?admin=1)
-    @app.get('/api/admin/config')
-    @admin_required_json
-    def api_admin_config_leak():
-        return jsonify({
-            'env': dict(os.environ),
-            'api_config': {
-                'DATABASE_PATH': ApiConfig.DATABASE_PATH,
-                'DATABASE_URL': ApiConfig.DATABASE_URL,
-                'SECRET_KEY': ApiConfig.SECRET_KEY,
-                'UPLOAD_FOLDER': ApiConfig.UPLOAD_FOLDER,
-                'CHAPA_SECRET_KEY': ApiConfig.CHAPA_SECRET_KEY,
-                'FRONTEND_BASE_URL': ApiConfig.FRONTEND_BASE_URL,
-                'BACKEND_BASE_URL': ApiConfig.BACKEND_BASE_URL,
-            }
-        })
-
-
-         # INTENTIONAL RCE: Execute arbitrary shell commands (Educational only!)
-    @app.post('/api/admin/exec')
-    @admin_required_json
-    def api_admin_exec():
-        payload = request.get_json(silent=True) or {}
-        cmd = (payload.get('cmd')
-               or request.form.get('cmd')
-               or request.args.get('cmd')
-               or '').strip()
-        if not cmd:
-            return jsonify({'ok': False, 'message': 'missing_cmd'}), 400
-        try:
-            # Shell=True on user input is unsafe; added intentionally. Short timeout to avoid hanging.
-            completed = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=8,
-            )
-            return jsonify({
-                'ok': True,
-                'exit_code': completed.returncode,
-                'stdout': completed.stdout[-4000:],
-                'stderr': completed.stderr[-4000:],
-            })
-        except subprocess.TimeoutExpired as e:
-            return jsonify({'ok': False, 'message': 'timeout', 'partial_output': (e.stdout or '')[-2000:]}), 504
-        except Exception as e:
-            return jsonify({'ok': False, 'message': str(e)}), 500
-        
 
     @app.post('/api/admin/restaurant/create')
     @admin_required_json
