@@ -2103,15 +2103,14 @@ def create_app() -> Flask:
     @admin_required_json
     def api_admin_config_leak():
         return jsonify({
-            'env': dict(os.environ),
             'api_config': {
-                'DATABASE_PATH': ApiConfig.DATABASE_PATH,
-                'DATABASE_URL': ApiConfig.DATABASE_URL,
-                'SECRET_KEY': ApiConfig.SECRET_KEY,
-                'UPLOAD_FOLDER': ApiConfig.UPLOAD_FOLDER,
-                'CHAPA_SECRET_KEY': ApiConfig.CHAPA_SECRET_KEY,
-                'FRONTEND_BASE_URL': ApiConfig.FRONTEND_BASE_URL,
-                'BACKEND_BASE_URL': ApiConfig.BACKEND_BASE_URL,
+                'DATABASE_PATH': "You get the DATABASE_PATH",
+                'DATABASE_URL': "You get the DATABASE_URL",
+                'SECRET_KEY': "you get the SECRET_KEY",
+                'UPLOAD_FOLDER': "You get the UPLOAD_FOLDER",
+                'CHAPA_SECRET_KEY': "You get the CHAPA_SECRET_KEY",
+                'FRONTEND_BASE_URL': "You get the FRONTEND_BASE_URL",
+                'BACKEND_BASE_URL': "You get the BACKEND_BASE_URL",
             }
         })
 
