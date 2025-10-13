@@ -9,6 +9,18 @@ type DashboardData = {
   menu_items?: any[]
 }
 
+type PendingOrder = {
+  order_id: number
+  restaurant_id: number
+  total_amount: number
+  order_status: string
+  created_at: string
+  restaurant_name: string
+  payment_status: string
+  tx_ref: string
+  payment_provider: string
+}
+
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -16,6 +28,8 @@ export default function DashboardPage() {
   const [isCreating, setIsCreating] = useState(false)
   const [createMessage, setCreateMessage] = useState<{type: 'success' | 'error', text: string} | null>(null)
   const [deletingRestaurant, setDeletingRestaurant] = useState<number | null>(null)
+  const [pendingOrders, setPendingOrders] = useState<PendingOrder[]>([])
+  const [cancellingOrder, setCancellingOrder] = useState<number | null>(null)
   const formRef = useRef<HTMLFormElement>(null)
 
   useEffect(() => {
@@ -26,7 +40,39 @@ export default function DashboardPage() {
         const txRef = url.searchParams.get('tx_ref')
         if (txRef) {
           const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
-          await fetch(`${base}/api/payments/chapa/verify?tx_ref=${encodeURIComponent(txRef)}`)
+          
+          // First verify with the original endpoint (for backward compatibility)
+          try {
+            await fetch(`${base}/api/payments/chapa/verify?tx_ref=${encodeURIComponent(txRef)}`)
+          } catch (e) {
+            console.log('Payment verification failed:', e)
+          }
+          
+          // Then get detailed payment status
+          try {
+            const statusRes = await fetch(`${base}/api/payments/status/${encodeURIComponent(txRef)}`, {
+              credentials: 'include'
+            })
+            
+            if (statusRes.ok) {
+              const paymentData = await statusRes.json()
+              if (paymentData.ok && paymentData.payment) {
+                const { status, amount, currency } = paymentData.payment
+                
+                // Show payment status to user
+                if (status === 'paid') {
+                  console.log(`Payment successful: ${amount} ${currency}`)
+                  // You could show a success message here
+                } else if (status === 'failed') {
+                  console.log('Payment failed')
+                  // You could show an error message here
+                }
+              }
+            }
+          } catch (e) {
+            console.log('Payment status check failed:', e)
+          }
+          
           // Remove tx_ref from URL to avoid repeat
           url.searchParams.delete('tx_ref')
           window.history.replaceState({}, '', url.toString())
@@ -34,6 +80,21 @@ export default function DashboardPage() {
       } catch {}
     }
     verifyIfNeeded()
+
+    const loadPendingOrders = async () => {
+      if (data?.role !== 'customer') return
+      
+      try {
+        const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
+        const res = await fetch(`${base}/api/orders/pending`, { credentials: 'include' })
+        if (res.ok) {
+          const pendingData = await res.json()
+          setPendingOrders(pendingData.orders || [])
+        }
+      } catch (e) {
+        console.log('Failed to load pending orders:', e)
+      }
+    }
 
     const load = async () => {
       const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
@@ -51,8 +112,46 @@ export default function DashboardPage() {
         setIsLoading(false)
       }
     }
-    load()
+    
+    const loadAll = async () => {
+      await load()
+      await loadPendingOrders()
+    }
+    
+    loadAll()
   }, [])
+
+  const cancelOrder = async (orderId: number) => {
+    setCancellingOrder(orderId)
+    try {
+      const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
+      const res = await fetch(`${base}/api/orders/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ order_id: orderId })
+      })
+      
+      if (res.ok) {
+        const result = await res.json()
+        if (result.ok) {
+          // Remove from pending orders
+          setPendingOrders(prev => prev.filter(order => order.order_id !== orderId))
+          alert(`Order cancelled successfully. ${result.items_restored} items restored to cart.`)
+          // Reload the page to update cart
+          window.location.reload()
+        } else {
+          alert(`Failed to cancel order: ${result.message}`)
+        }
+      } else {
+        alert('Failed to cancel order. Please try again.')
+      }
+    } catch (err) {
+      alert('Network error. Please try again.')
+    } finally {
+      setCancellingOrder(null)
+    }
+  }
 
   if (isLoading) {
     return (
@@ -90,10 +189,54 @@ export default function DashboardPage() {
     <main className="max-w-6xl mx-auto p-6 space-y-6">
       <h1 className="text-3xl font-bold">Dashboard ({data.role})</h1>
 
+      {/* Pending Orders Section - Only show if there are pending orders */}
+      {data.role === 'customer' && pendingOrders.length > 0 && (
+        <div className="bg-orange-50 border border-orange-200 rounded-lg shadow p-6">
+          <h2 className="text-xl font-semibold text-orange-800 mb-4">⚠️ Orders Awaiting Payment</h2>
+          <p className="text-orange-700 mb-4">
+            You have {pendingOrders.length} order(s) waiting for payment. Complete payment or cancel to free up your cart.
+          </p>
+          <div className="space-y-3">
+            {pendingOrders.map((order) => (
+              <div key={order.order_id} className="bg-white border border-orange-200 rounded-lg p-4">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <h3 className="font-semibold text-gray-800">{order.restaurant_name}</h3>
+                    <p className="text-sm text-gray-600">
+                      Order #{order.order_id} • ${order.total_amount} • {new Date(order.created_at).toLocaleString()}
+                    </p>
+                    <p className="text-sm text-orange-600">
+                      Payment Status: {order.payment_status}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    {order.tx_ref && (
+                      <a
+                        href={`/dashboard?tx_ref=${order.tx_ref}`}
+                        className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+                      >
+                        Complete Payment
+                      </a>
+                    )}
+                    <button
+                      onClick={() => cancelOrder(order.order_id)}
+                      disabled={cancellingOrder === order.order_id}
+                      className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700 disabled:opacity-50"
+                    >
+                      {cancellingOrder === order.order_id ? 'Cancelling...' : 'Cancel Order'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {data.role === 'customer' && (
         <div className="grid md:grid-cols-3 gap-6">
           <section className="md:col-span-2 bg-white border rounded-lg shadow p-6">
-            <div className="border-b pb-3 mb-4"><h2 className="font-semibold">Order History</h2></div>
+            <div className="border-b pb-3 mb-4"><h2 className="font-semibold">Confirmed Orders</h2></div>
             {data.orders && data.orders.length > 0 ? (
               <div className="space-y-4">
                 {data.orders.map((o: any) => (

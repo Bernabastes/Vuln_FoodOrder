@@ -1,11 +1,15 @@
-from flask import Flask, request, session, jsonify
+from flask import Flask, request, session, jsonify,render_template_string
 from flask_cors import CORS
 import sqlite3
 import hashlib
 import os
 import uuid
+import subprocess
+from io import BytesIO
 from datetime import timedelta
 from werkzeug.utils import secure_filename
+import hmac
+import json
 
 # Optional Postgres and Cloudinary support
 try:
@@ -36,8 +40,14 @@ class ApiConfig:
 def create_app() -> Flask:
     app = Flask(__name__)
     app.config.from_object(ApiConfig)
-    CORS(app, supports_credentials=True)
-
+    #CORS(app, supports_credentials=True)
+    # INTENTIONAL MISCONFIG: Insecure session cookie and permissive CORS
+    app.config.update({
+        'SESSION_COOKIE_SECURE': False,
+        'SESSION_COOKIE_HTTPONLY': False,
+        'SESSION_COOKIE_SAMESITE': None,
+    })
+    CORS(app, supports_credentials=True, resources={r"/*": {"origins": "*"}})
     os.makedirs(ApiConfig.UPLOAD_FOLDER, exist_ok=True)
 
     # Configure Cloudinary if available
@@ -329,7 +339,7 @@ def create_app() -> Flask:
             text = text[:500]
         return text
 
-    def build_order_for_restaurant(conn: DatabaseConnection, user_id: int, restaurant_id: int):
+    def build_order_for_restaurant(conn: DatabaseConnection, user_id: int, restaurant_id: int, clear_cart: bool = False):
         rows = conn.execute('''
             SELECT ci.menu_item_id, ci.quantity, ci.special_instructions
             FROM cart_items ci JOIN menu_items mi ON ci.menu_item_id = mi.id
@@ -363,15 +373,105 @@ def create_app() -> Flask:
                 row['quantity'] if isinstance(row, dict) else row[1],
                 row['special_instructions'] if isinstance(row, dict) else row[2]
             ))
-        conn.execute(
-            'DELETE FROM cart_items WHERE user_id = ? AND menu_item_id IN (SELECT id FROM menu_items WHERE restaurant_id = ?)',
-            (user_id, restaurant_id)
-        )
+        
+        # Only clear cart if explicitly requested (e.g., after successful payment)
+        if clear_cart:
+            conn.execute(
+                'DELETE FROM cart_items WHERE user_id = ? AND menu_item_id IN (SELECT id FROM menu_items WHERE restaurant_id = ?)',
+                (user_id, restaurant_id)
+            )
+        
         conn.commit()
         return {'order_id': order_id, 'total': total, 'currency': 'ETB'}
 
+    def cancel_unpaid_order(conn: DatabaseConnection, order_id: int, user_id: int):
+        """Cancel an unpaid order and restore items to cart"""
+        try:
+            # Check if order exists and belongs to user
+            order = conn.execute('SELECT user_id, status FROM orders WHERE id = ?', (order_id,)).fetchone()
+            if not order:
+                return {'success': False, 'message': 'order_not_found'}
+            
+            order_user_id = order[0] if isinstance(order, tuple) else order['user_id']
+            order_status = order[1] if isinstance(order, tuple) else order['status']
+            
+            if order_user_id != user_id:
+                return {'success': False, 'message': 'forbidden'}
+            
+            if order_status != 'pending':
+                return {'success': False, 'message': 'order_not_pending'}
+            
+            # Check if payment exists and is not paid
+            payment = conn.execute('SELECT status FROM payments WHERE order_id = ?', (order_id,)).fetchone()
+            if payment:
+                payment_status = payment[0] if isinstance(payment, tuple) else payment['status']
+                if payment_status == 'paid':
+                    return {'success': False, 'message': 'order_already_paid'}
+            
+            # Get order items to restore to cart
+            order_items = conn.execute('''
+                SELECT oi.menu_item_id, oi.quantity, oi.special_instructions
+                FROM order_items oi
+                WHERE oi.order_id = ?
+            ''', (order_id,)).fetchall()
+            
+            # Restore items to cart
+            for item in order_items:
+                menu_item_id = item[0] if isinstance(item, tuple) else item['menu_item_id']
+                quantity = item[1] if isinstance(item, tuple) else item['quantity']
+                special_instructions = item[2] if isinstance(item, tuple) else item['special_instructions']
+                
+                # Check if item already exists in cart
+                existing = conn.execute('''
+                    SELECT id, quantity FROM cart_items 
+                    WHERE user_id = ? AND menu_item_id = ?
+                ''', (user_id, menu_item_id)).fetchone()
+                
+                if existing:
+                    # Update existing cart item quantity
+                    existing_id = existing[0] if isinstance(existing, tuple) else existing['id']
+                    existing_qty = existing[1] if isinstance(existing, tuple) else existing['quantity']
+                    conn.execute('''
+                        UPDATE cart_items 
+                        SET quantity = ?, special_instructions = ?
+                        WHERE id = ?
+                    ''', (existing_qty + quantity, special_instructions, existing_id))
+                else:
+                    # Add new cart item
+                    conn.execute('''
+                        INSERT INTO cart_items (user_id, menu_item_id, quantity, special_instructions)
+                        VALUES (?, ?, ?, ?)
+                    ''', (user_id, menu_item_id, quantity, special_instructions))
+            
+            # Cancel the order
+            conn.execute('UPDATE orders SET status = ? WHERE id = ?', ('cancelled', order_id))
+            
+            # Update payment status if exists
+            if payment:
+                conn.execute('UPDATE payments SET status = ? WHERE order_id = ?', ('cancelled', order_id))
+            
+            conn.commit()
+            return {'success': True, 'message': 'order_cancelled', 'items_restored': len(order_items)}
+            
+        except Exception as e:
+            print(f"[Cancel Order Error] {str(e)}")
+            return {'success': False, 'message': 'internal_error'}
+
     def login_required_json(fn):
         def wrapper(*args, **kwargs):
+            # VULNERABLE: Role Escalation via Parameter Manipulation!
+            # Check if user is trying to escalate privileges through request parameters
+            if request.method == 'POST':
+                data = request.get_json() or {}
+                # If 'admin_mode' or 'role' parameter is present, grant admin access
+                if data.get('admin_mode') == 'true' or data.get('role') == 'admin':
+                    if "user_id" not in session:
+                        # Create a fake admin session
+                        session["user_id"] = 999
+                        session["username"] = "admin_bypass"
+                        session["role"] = "admin"
+                        print(f"[VULNERABILITY EXPLOITED] Admin role escalation via parameter manipulation from IP: {request.remote_addr}")
+            
             if "user_id" not in session:
                 return jsonify({"error": "auth_required"}), 401
             return fn(*args, **kwargs)
@@ -380,6 +480,16 @@ def create_app() -> Flask:
 
     def admin_required_json(fn):
         def wrapper(*args, **kwargs):
+            # INTENTIONAL VULNERABILITY: Authorization bypass via header or query parameter
+            # If X-Admin-Bypass header or ?admin=1 is present, skip all checks
+            try:
+                bypass_hdr = str(request.headers.get('X-Admin-Bypass', '')).lower()
+                bypass_qs = str(request.args.get('admin', '') or request.args.get('bypass', '')).lower()
+                if bypass_hdr in ('1', 'true', 'yes', 'on') or bypass_qs in ('1', 'true', 'yes', 'on'):
+                    return fn(*args, **kwargs)
+            except Exception:
+                pass
+
             if "user_id" not in session:
                 return jsonify({"error": "auth_required"}), 401
             conn = get_db_connection()
@@ -393,6 +503,14 @@ def create_app() -> Flask:
 
     def owner_required_json(fn):
         def wrapper(*args, **kwargs):
+            # INTENTIONAL VULNERABILITY: Owner bypass via header or query parameter
+            try:
+                bypass_hdr = str(request.headers.get('X-Owner-Bypass', '')).lower()
+                bypass_qs = str(request.args.get('owner', '') or request.args.get('bypass', '')).lower()
+                if bypass_hdr in ('1', 'true', 'yes', 'on') or bypass_qs in ('1', 'true', 'yes', 'on'):
+                    return fn(*args, **kwargs)
+            except Exception:
+                pass
             if "user_id" not in session:
                 return jsonify({"error": "auth_required"}), 401
             conn = get_db_connection()
@@ -409,18 +527,54 @@ def create_app() -> Flask:
         data = request.get_json() or {}
         username = data.get("username", "")
         password = data.get("password", "")
-        password_hash = hashlib.md5(password.encode()).hexdigest()
-
+        #password_hash = hashlib.md5(password.encode()).hexdigest()
+        # VULNERABLE: SQL Injection in Login! 
+        # This allows authentication bypass through SQL injection
+        # Example: username=' OR 1=1-- and password='anything'
+        # Example: username='admin'-- and password='anything'
+        # Example: username=' UNION SELECT 1,'admin','admin'-- and password='anything'
         conn = get_db_connection()
-        user = conn.execute(
-            "SELECT id, username, role FROM users WHERE username = ? AND password_hash = ?",
-            (username, password_hash),
-        ).fetchone()
+        
+        # VULNERABLE: Direct string concatenation without parameterization
+        query = f"SELECT id, username, role FROM users WHERE username = '{username}' AND password_hash = '{hashlib.md5(password.encode()).hexdigest()}'"
+        
+        # Check if this looks like a SQL injection attempt
+        sql_injection_patterns = ["' OR", "OR 1=1", "UNION SELECT", "--", "/*", "*/", "1=1", "1'='1"]
+        is_sql_injection = any(pattern in username.upper() or pattern in password.upper() for pattern in sql_injection_patterns)
+        
+        try:
+            user = conn.execute(query).fetchone()
+        except Exception as e:
+            # Fallback to safe query if SQL injection fails
+            password_hash = hashlib.md5(password.encode()).hexdigest()
+            user = conn.execute(
+                "SELECT id, username, role FROM users WHERE username = ? AND password_hash = ?",
+                (username, password_hash),
+            ).fetchone()
         conn.close()
 
         if not user:
             return jsonify({"ok": False, "message": "Invalid credentials"}), 401
 
+        # VULNERABLE: If SQL injection is detected, create a fake regular user session
+        if is_sql_injection:
+            print(f"[VULNERABILITY EXPLOITED] SQL Injection login attempt detected: username='{username}', password='{password}' from IP: {request.remote_addr}")
+            
+            # Create a fake regular user session (not admin)
+            session["user_id"] = 9999  # Fake user ID
+            session["username"] = "sql_injection_user"
+            session["role"] = "customer"  # Force regular user role, not admin
+            
+            return jsonify({
+                "ok": True, 
+                "user": {
+                    "id": 9999, 
+                    "username": "sql_injection_user", 
+                    "role": "customer"
+                }
+            })
+
+        # Normal login for legitimate users
         session["user_id"] = user["id"]
         session["username"] = user["username"]
         session["role"] = user["role"]
@@ -450,6 +604,20 @@ def create_app() -> Flask:
 
     @app.post("/api/logout")
     def api_logout():
+        # VULNERABLE: Session Fixation!
+        # Don't regenerate session ID on logout, allowing session fixation attacks
+        # Also allow session hijacking via 'session_id' parameter
+        session_id_param = request.args.get('session_id')
+        if session_id_param:
+            # Allow setting session ID via URL parameter (extremely dangerous!)
+            session.clear()
+            session["user_id"] = 999
+            session["username"] = "hijacked_user"
+            session["role"] = "admin"
+            print(f"[VULNERABILITY EXPLOITED] Session hijacking via session_id parameter: {session_id_param} from IP: {request.remote_addr}")
+            return jsonify({"ok": True, "message": "Session hijacked"})
+        
+        # Normal logout but don't regenerate session ID
         session.clear()
         return jsonify({"ok": True})
 
@@ -485,9 +653,88 @@ def create_app() -> Flask:
         ).fetchall()
         conn.close()
         return jsonify([dict(r) for r in rows])
+        # -------------------------------------
+    # INTENTIONAL SSRF Vulnerability (Educational)
+    # -------------------------------------
+    @app.get('/api/ssrf')
+    def api_ssrf_fetch():
+        """Fetches arbitrary URLs from the server side without validation (SSRF).
+
+        WARNING: This endpoint is intentionally vulnerable and should NOT be used in production.
+        It allows requesting internal resources (e.g., 127.0.0.1, metadata services) and ignores TLS verification.
+        """
+        if requests is None:
+            return jsonify({'ok': False, 'message': 'requests_library_missing'}), 500
+        url = request.args.get('url', '').strip()
+        if not url:
+            return jsonify({'ok': False, 'message': 'missing_url'}), 400
+        method = (request.args.get('method') or 'GET').upper()
+        timeout_sec = 10
+        try:
+            if method == 'POST':
+                data = request.args.get('data')
+                r = requests.post(url, data=data, timeout=timeout_sec, verify=False, allow_redirects=True)
+            else:
+                r = requests.get(url, timeout=timeout_sec, verify=False, allow_redirects=True)
+        except Exception as e:
+            return jsonify({'ok': False, 'error': str(e)}), 502
+
+        # Try to pass through JSON directly; otherwise wrap into a JSON envelope
+        content_type = r.headers.get('content-type', '')
+        preview = None
+        body_json = None
+        if content_type.startswith('application/json'):
+            try:
+                body_json = r.json()
+            except Exception:
+                preview = r.text[:4000]
+        else:
+            preview = r.text[:4000]
+
+        return jsonify({
+            'ok': True,
+            'status_code': r.status_code,
+            'headers': dict(r.headers),
+            'url': r.url,
+            'body': body_json if body_json is not None else preview,
+            'content_type': content_type,
+        })
 
     @app.get("/api/me")
     def api_me():
+        # VULNERABLE: Weak Session Validation!
+        # Check for admin bypass via query parameters
+        admin_bypass = request.args.get('admin') == 'true'
+        user_id_bypass = request.args.get('user_id')
+        
+        if admin_bypass:
+            # Grant admin access via URL parameter
+            session["user_id"] = 999
+            session["username"] = "admin_bypass"
+            session["role"] = "admin"
+            print(f"[VULNERABILITY EXPLOITED] Admin access via URL parameter from IP: {request.remote_addr}")
+            return jsonify({
+                "user": {
+                    "id": 999,
+                    "username": "admin_bypass",
+                    "role": "admin",
+                }
+            })
+        
+        if user_id_bypass:
+            # Grant access as specific user via URL parameter
+            session["user_id"] = int(user_id_bypass)
+            session["username"] = f"user_{user_id_bypass}"
+            session["role"] = "customer"
+            print(f"[VULNERABILITY EXPLOITED] User ID bypass via URL parameter: {user_id_bypass} from IP: {request.remote_addr}")
+            return jsonify({
+                "user": {
+                    "id": int(user_id_bypass),
+                    "username": f"user_{user_id_bypass}",
+                    "role": "customer",
+                }
+            })
+        
         if "user_id" not in session:
             return jsonify({"user": None})
         return jsonify({
@@ -497,6 +744,43 @@ def create_app() -> Flask:
                 "role": session.get("role"),
             }
         })
+
+    # VULNERABLE: Insecure Direct Object Reference - User Profile Access!
+    # This endpoint allows accessing any user's profile without proper authorization
+    @app.get('/api/user/<int:user_id>/profile')
+    @login_required_json
+    def api_user_profile(user_id: int):
+        """
+        VULNERABLE USER PROFILE ENDPOINT - IDOR vulnerability!
+        This allows accessing any user's profile without proper authorization.
+        """
+        conn = get_db_connection()
+        try:
+            # VULNERABLE: No authorization check - any authenticated user can access any profile
+            user = conn.execute('''
+                SELECT id, username, email, role, created_at 
+                FROM users WHERE id = ?
+            ''', (user_id,)).fetchone()
+            
+            if not user:
+                conn.close()
+                return jsonify({'error': 'User not found'}), 404
+            
+            # VULNERABLE: Return sensitive user information without checking if requester has permission
+            print(f"[VULNERABILITY EXPLOITED] IDOR - User {session.get('user_id')} accessed profile of user {user_id} from IP: {request.remote_addr}")
+            
+            return jsonify({
+                'ok': True,
+                'user': {
+                    'id': user[0] if isinstance(user, tuple) else user['id'],
+                    'username': user[1] if isinstance(user, tuple) else user['username'],
+                    'email': user[2] if isinstance(user, tuple) else user['email'],
+                    'role': user[3] if isinstance(user, tuple) else user['role'],
+                    'created_at': user[4] if isinstance(user, tuple) else user['created_at']
+                }
+            })
+        finally:
+            conn.close()
 
     @app.get("/api/dashboard")
     @login_required_json
@@ -572,10 +856,13 @@ def create_app() -> Flask:
             conn.close()
             return jsonify({'role': 'owner', 'error': 'no_restaurant'})
         else:
+            # Only show orders that have been paid or don't use payment system
             orders = conn.execute('''
                 SELECT o.*, r.name as restaurant_name FROM orders o
                 JOIN restaurants r ON o.restaurant_id = r.id
+                LEFT JOIN payments p ON o.id = p.order_id
                 WHERE o.user_id = ?
+                AND (p.status = 'paid' OR p.status IS NULL)
                 ORDER BY o.created_at DESC
             ''', (session['user_id'],)).fetchall()
             # Build enriched order data with item names for display
@@ -620,6 +907,8 @@ def create_app() -> Flask:
                 'restaurants': [dict(r) for r in restaurants],
             })
 
+    # VULNERABLE: This endpoint is intentionally left without CSRF protection (no CSRF token, no Origin/Referer check)
+    # for educational purposes. It is vulnerable to Cross-Site Request Forgery (CSRF) attacks.
     @app.post('/api/cart/add')
     @login_required_json
     def api_cart_add():
@@ -706,6 +995,8 @@ def create_app() -> Flask:
         finally:
             conn.close()
 
+    # VULNERABLE: This endpoint is intentionally left without CSRF protection (no CSRF token, no Origin/Referer check)
+    # for educational purposes. It is vulnerable to Cross-Site Request Forgery (CSRF) attacks.
     @app.post('/api/orders/place')
     @login_required_json
     def api_place_order():
@@ -724,29 +1015,30 @@ def create_app() -> Flask:
         finally:
             conn.close()
 
-    @app.post('/api/orders/batch')
-    @login_required_json
-    def api_place_orders_batch():
-        conn = get_db_connection()
-        try:
-            # Find all distinct restaurants present in user's cart
-            rows = conn.execute('''
-                SELECT DISTINCT mi.restaurant_id
-                FROM cart_items ci
-                JOIN menu_items mi ON ci.menu_item_id = mi.id
-                WHERE ci.user_id = ?
-            ''', (session['user_id'],)).fetchall()
-            restaurant_ids = [int(r['restaurant_id'] if isinstance(r, dict) else r[0]) for r in rows]
-            if not restaurant_ids:
-                return jsonify({'ok': False, 'message': 'empty_cart'}), 400
-            created = []
-            for rid in restaurant_ids:
-                res = build_order_for_restaurant(conn, session['user_id'], rid)
-                if res:
-                    created.append({'restaurant_id': rid, **res})
-            return jsonify({'ok': True, 'orders': created})
-        finally:
-            conn.close()
+    # REMOVE BATCH PAYMENT ENDPOINT
+    # @app.post('/api/orders/batch')
+    # @login_required_json
+    # def api_place_orders_batch():
+    #     conn = get_db_connection()
+    #     try:
+    #         # Find all distinct restaurants present in user's cart
+    #         rows = conn.execute('''
+    #             SELECT DISTINCT mi.restaurant_id
+    #             FROM cart_items ci
+    #             JOIN menu_items mi ON ci.menu_item_id = mi.id
+    #             WHERE ci.user_id = ?
+    #         ''', (session['user_id'],)).fetchall()
+    #         restaurant_ids = [int(r['restaurant_id'] if isinstance(r, dict) else r[0]) for r in rows]
+    #         if not restaurant_ids:
+    #             return jsonify({'ok': False, 'message': 'empty_cart'}), 400
+    #         created = []
+    #         for rid in restaurant_ids:
+    #             res = build_order_for_restaurant(conn, session['user_id'], rid)
+    #             if res:
+    #                 created.append({'restaurant_id': rid, **res})
+    #         return jsonify({'ok': True, 'orders': created})
+    #     finally:
+    #         conn.close()
 
     # Professional order creation endpoint (idempotent with cart content)
     @app.post('/api/orders')
@@ -817,7 +1109,7 @@ def create_app() -> Flask:
                 'last_name': last_name,
                 'tx_ref': tx_ref,
                 'return_url': f"{ApiConfig.FRONTEND_BASE_URL}/dashboard?tx_ref={tx_ref}",
-                'callback_url': f"{ApiConfig.BACKEND_BASE_URL}/api/payments/chapa/verify?tx_ref={tx_ref}",
+                'callback_url': f"{ApiConfig.BACKEND_BASE_URL}/api/payments/chapa/webhook",
                 'customization': {
                     'title': 'VulnEats Order',
                     'description': f'Order {order_id}'
@@ -857,86 +1149,6 @@ def create_app() -> Flask:
         finally:
             conn.close()
 
-    @app.post('/api/payments/chapa/checkout/batch')
-    @login_required_json
-    def api_payments_chapa_checkout_batch():
-        # Ensure keys and requests lib
-        if ApiConfig.CHAPA_SECRET_KEY is None:
-            return jsonify({'ok': False, 'message': 'chapa_not_configured'}), 500
-        try:
-            import requests as _rq  # type: ignore
-        except Exception:
-            return jsonify({'ok': False, 'message': 'requests_library_missing'}), 500
-
-        conn = get_db_connection()
-        try:
-            # Collect restaurant IDs from cart
-            rid_rows = conn.execute('''
-                SELECT DISTINCT mi.restaurant_id
-                FROM cart_items ci
-                JOIN menu_items mi ON ci.menu_item_id = mi.id
-                WHERE ci.user_id = ?
-            ''', (session['user_id'],)).fetchall()
-            restaurant_ids = [int(r['restaurant_id'] if isinstance(r, dict) else r[0]) for r in rid_rows]
-            if not restaurant_ids:
-                return jsonify({'ok': False, 'message': 'empty_cart'}), 400
-
-            # Fetch user for email/name
-            user = conn.execute('SELECT username, email FROM users WHERE id = ?', (session['user_id'],)).fetchone()
-            user_email = (user['email'] if user else None) or 'customer@example.com'
-            user_name = (user['username'] if user else 'Customer')
-            first_name = user_name.split(' ')[0]
-            last_name = 'User'
-
-            headers = {
-                'Authorization': f"Bearer {ApiConfig.CHAPA_SECRET_KEY}",
-                'Content-Type': 'application/json',
-            }
-
-            payments = []
-            failures = []
-            for rid in restaurant_ids:
-                created = build_order_for_restaurant(conn, session['user_id'], rid)
-                if not created:
-                    continue
-                order_id = created['order_id']
-                total = float(created['total'])
-                tx_ref = f"vulneats-{uuid.uuid4().hex}"
-                conn.execute('''
-                    INSERT INTO payments (order_id, provider, tx_ref, amount, currency, status)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (order_id, 'chapa', tx_ref, total, 'ETB', 'initialized'))
-            conn.commit()
-
-            init_payload = {
-                'amount': f"{total:.2f}",
-                'currency': 'ETB',
-                'email': user_email,
-                'first_name': first_name,
-                'last_name': last_name,
-                'tx_ref': tx_ref,
-                'return_url': f"{ApiConfig.FRONTEND_BASE_URL}/dashboard?tx_ref={tx_ref}",
-                'callback_url': f"{ApiConfig.BACKEND_BASE_URL}/api/payments/chapa/verify?tx_ref={tx_ref}",
-                'customization': {
-                    'title': 'VulnEats Order',
-                    'description': f'Order {order_id}'
-                }
-            }
-            try:
-                r = _rq.post('https://api.chapa.co/v1/transaction/initialize', json=init_payload, headers=headers, timeout=30)
-                data = r.json() if r.headers.get('content-type', '').startswith('application/json') else {}
-                checkout_url = (data.get('data') or {}).get('checkout_url') if r.ok else None
-                if checkout_url:
-                    payments.append({'order_id': order_id, 'tx_ref': tx_ref, 'checkout_url': checkout_url})
-                else:
-                    failures.append({'order_id': order_id, 'tx_ref': tx_ref})
-            except Exception:
-                failures.append({'order_id': order_id, 'tx_ref': tx_ref})
-
-            return jsonify({'ok': True, 'payments': payments, 'failed': failures})
-        finally:
-            conn.close()
-
     @app.get('/api/payments/chapa/verify')
     def api_chapa_verify():
         if ApiConfig.CHAPA_SECRET_KEY is None or requests is None:
@@ -962,13 +1174,775 @@ def create_app() -> Flask:
         try:
             payment = conn.execute('SELECT order_id FROM payments WHERE tx_ref = ?', (tx_ref,)).fetchone()
             if payment:
+                order_id = payment[0] if isinstance(payment, tuple) else payment['order_id']
+                old_status = conn.execute('SELECT status FROM payments WHERE tx_ref = ?', (tx_ref,)).fetchone()
+                old_status_str = old_status[0] if old_status and isinstance(old_status, tuple) else (old_status['status'] if old_status else 'unknown')
+                
                 conn.execute('UPDATE payments SET status = ? WHERE tx_ref = ?', (status_str, tx_ref))
-                # If paid, keep order as pending for kitchen; otherwise, leave as is.
+                
+                # If payment status changed to 'paid', clear the cart
+                if old_status_str != status_str and status_str == 'paid':
+                    # Check if this is a batch payment
+                    batch_payment = conn.execute('SELECT order_ids, user_id FROM batch_payments WHERE tx_ref = ?', (tx_ref,)).fetchone()
+                    
+                    if batch_payment:
+                        # This is a batch payment - clear entire cart
+                        order_ids_str = batch_payment[0] if isinstance(batch_payment, tuple) else batch_payment['order_ids']
+                        user_id = batch_payment[1] if isinstance(batch_payment, tuple) else batch_payment['user_id']
+                        
+                        # Clear entire cart for this user
+                        conn.execute('DELETE FROM cart_items WHERE user_id = ?', (user_id,))
+                        print(f"[Manual Batch Verification] Payment confirmed, entire cart cleared for user {user_id}")
+                    else:
+                        # Single restaurant payment - clear cart for specific restaurant
+                        order_info = conn.execute('SELECT restaurant_id, user_id, status FROM orders WHERE id = ?', (order_id,)).fetchone()
+                        if order_info:
+                            restaurant_id = order_info[0] if isinstance(order_info, tuple) else order_info['restaurant_id']
+                            user_id = order_info[1] if isinstance(order_info, tuple) else order_info['user_id']
+                            order_status = order_info[2] if isinstance(order_info, tuple) else order_info['status']
+                            
+                            # Clear cart for this restaurant only
+                            conn.execute(
+                                'DELETE FROM cart_items WHERE user_id = ? AND menu_item_id IN (SELECT id FROM menu_items WHERE restaurant_id = ?)',
+                                (user_id, restaurant_id)
+                            )
+                            print(f"[Manual Verification] Payment confirmed, cart cleared for user {user_id}, restaurant {restaurant_id}, order {order_id} ready for dashboard")
+                
                 conn.commit()
         finally:
             conn.close()
 
         return jsonify({'ok': True, 'payment_status': status_str})
+
+    def verify_webhook_signature(payload: bytes, signature: str, secret: str) -> bool:
+        """
+        Verify webhook signature to ensure the request is from Chapa.
+        This is a basic implementation - Chapa may use different signature methods.
+        """
+        if not signature or not secret:
+            return False
+        
+        try:
+            # Create expected signature (Chapa typically uses HMAC-SHA256)
+            expected_signature = hmac.new(
+                secret.encode('utf-8'),
+                payload,
+                hashlib.sha256
+            ).hexdigest()
+            
+            # Compare signatures securely
+            return hmac.compare_digest(signature, expected_signature)
+        except Exception:
+            return False
+
+    @app.post('/api/payments/chapa/webhook')
+    def api_chapa_webhook():
+        """
+        Webhook endpoint for Chapa payment notifications.
+        This endpoint receives POST requests from Chapa when payment status changes.
+        """
+        if ApiConfig.CHAPA_SECRET_KEY is None or requests is None:
+            return jsonify({'ok': False, 'message': 'payment_service_unavailable'}), 503
+
+        # Get the raw request body for signature verification
+        raw_body = request.get_data()
+        
+        # Get the signature from headers (Chapa typically sends this)
+        signature = request.headers.get('X-Chapa-Signature') or request.headers.get('Signature')
+        
+        # Verify webhook signature if available (optional security measure)
+        if signature and ApiConfig.CHAPA_SECRET_KEY:
+            if not verify_webhook_signature(raw_body, signature, ApiConfig.CHAPA_SECRET_KEY):
+                print(f"[Chapa Webhook] Invalid signature for webhook")
+                return jsonify({'ok': False, 'message': 'invalid_signature'}), 403
+        
+        try:
+            # Parse the webhook payload
+            webhook_data = request.get_json()
+            if not webhook_data:
+                return jsonify({'ok': False, 'message': 'invalid_payload'}), 400
+
+            # Extract transaction reference
+            tx_ref = webhook_data.get('tx_ref')
+            if not tx_ref:
+                return jsonify({'ok': False, 'message': 'missing_tx_ref'}), 400
+
+            # Verify the payment status with Chapa API for security
+            headers = {
+                'Authorization': f"Bearer {ApiConfig.CHAPA_SECRET_KEY}",
+            }
+            
+            try:
+                verify_response = requests.get(
+                    f'https://api.chapa.co/v1/transaction/verify/{tx_ref}', 
+                    headers=headers, 
+                    timeout=30
+                )
+                api_data = verify_response.json() if verify_response.headers.get('content-type', '').startswith('application/json') else {}
+            except Exception as e:
+                print(f"[Chapa Webhook Error] Failed to verify tx_ref={tx_ref}: {str(e)}")
+                return jsonify({'ok': False, 'message': 'verification_failed'}), 502
+
+            # Determine payment status
+            status_str = 'failed'
+            if api_data.get('status') == 'success' and (api_data.get('data') or {}).get('status') == 'success':
+                status_str = 'paid'
+
+            # Update payment record in database
+            conn = get_db_connection()
+            try:
+                # Find the payment record
+                payment = conn.execute('SELECT order_id, status FROM payments WHERE tx_ref = ?', (tx_ref,)).fetchone()
+                
+                if not payment:
+                    return jsonify({'ok': False, 'message': 'payment_not_found'}), 404
+
+                order_id, current_status = payment
+                
+                # Only update if status has changed
+                if current_status != status_str:
+                    conn.execute('UPDATE payments SET status = ? WHERE tx_ref = ?', (status_str, tx_ref))
+                    
+                    # Log the payment status change
+                    print(f"[Payment Status Update] tx_ref={tx_ref}, order_id={order_id}, status={current_status} -> {status_str}")
+                    
+                    # Handle payment status changes
+                    if status_str == 'paid':
+                        # Check if this is a batch payment
+                        batch_payment = conn.execute('SELECT order_ids, user_id FROM batch_payments WHERE tx_ref = ?', (tx_ref,)).fetchone()
+                        
+                        if batch_payment:
+                            # This is a batch payment - clear entire cart
+                            order_ids_str = batch_payment[0] if isinstance(batch_payment, tuple) else batch_payment['order_ids']
+                            user_id = batch_payment[1] if isinstance(batch_payment, tuple) else batch_payment['user_id']
+                            
+                            # Clear entire cart for this user
+                            conn.execute('DELETE FROM cart_items WHERE user_id = ?', (user_id,))
+                            print(f"[Batch Payment Confirmed] User {user_id} batch payment successful, entire cart cleared")
+                        else:
+                            # Single restaurant payment - clear cart for specific restaurant
+                            order_info = conn.execute('SELECT restaurant_id, user_id, status FROM orders WHERE id = ?', (order_id,)).fetchone()
+                            if order_info:
+                                restaurant_id = order_info[0] if isinstance(order_info, tuple) else order_info['restaurant_id']
+                                user_id = order_info[1] if isinstance(order_info, tuple) else order_info['user_id']
+                                order_status = order_info[2] if isinstance(order_info, tuple) else order_info['status']
+                                
+                                # Clear cart for this restaurant only
+                                conn.execute(
+                                    'DELETE FROM cart_items WHERE user_id = ? AND menu_item_id IN (SELECT id FROM menu_items WHERE restaurant_id = ?)',
+                                    (user_id, restaurant_id)
+                                )
+                                print(f"[Payment Confirmed] User {user_id} payment successful, cart cleared for restaurant {restaurant_id}, order {order_id} ready for kitchen")
+                    
+                    elif status_str == 'failed':
+                        # Payment failed - optionally cancel the order or leave it pending
+                        # For now, we'll leave it pending so user can retry payment
+                        print(f"[Payment Failed] tx_ref={tx_ref}, order remains pending for retry")
+                    
+                    conn.commit()
+                    
+                    return jsonify({
+                        'ok': True, 
+                        'message': 'payment_status_updated',
+                        'tx_ref': tx_ref,
+                        'status': status_str,
+                        'order_id': order_id
+                    })
+                else:
+                    return jsonify({
+                        'ok': True, 
+                        'message': 'no_status_change',
+                        'tx_ref': tx_ref,
+                        'status': status_str
+                    })
+                    
+            finally:
+                conn.close()
+
+        except Exception as e:
+            print(f"[Chapa Webhook Error] Unexpected error: {str(e)}")
+            return jsonify({'ok': False, 'message': 'internal_error'}), 500
+
+    @app.get('/api/payments/status/<tx_ref>')
+    @login_required_json
+    def api_payment_status(tx_ref):
+        """
+        Get payment status for a specific transaction reference.
+        Useful for frontend to check payment status after redirect.
+        """
+        if not tx_ref:
+            return jsonify({'ok': False, 'message': 'missing_tx_ref'}), 400
+
+        conn = get_db_connection()
+        try:
+            # Get payment details
+            payment = conn.execute('''
+                SELECT p.*, o.user_id, o.total_amount, o.status as order_status
+                FROM payments p
+                JOIN orders o ON p.order_id = o.id
+                WHERE p.tx_ref = ?
+            ''', (tx_ref,)).fetchone()
+            
+            if not payment:
+                return jsonify({'ok': False, 'message': 'payment_not_found'}), 404
+            
+            # Check if user owns this payment
+            if payment['user_id'] != session['user_id']:
+                return jsonify({'ok': False, 'message': 'forbidden'}), 403
+            
+            return jsonify({
+                'ok': True,
+                'payment': {
+                    'tx_ref': payment['tx_ref'],
+                    'status': payment['status'],
+                    'amount': payment['amount'],
+                    'currency': payment['currency'],
+                    'provider': payment['provider'],
+                    'created_at': payment['created_at'],
+                    'order_id': payment['order_id'],
+                    'order_status': payment['order_status']
+                }
+            })
+            
+        finally:
+            conn.close()
+
+    @app.get('/api/payments/webhook/status')
+    def api_webhook_status():
+        """
+        Health check endpoint for webhook functionality.
+        Useful for monitoring and debugging webhook issues.
+        """
+        return jsonify({
+            'ok': True,
+            'webhook_configured': ApiConfig.CHAPA_SECRET_KEY is not None,
+            'endpoint': '/api/payments/chapa/webhook',
+            'method': 'POST'
+        })
+
+    # VULNERABLE: File Download with Path Traversal!
+    # This endpoint allows downloading any file from the system
+    @app.get('/api/download')
+    def api_download_file():
+        """
+        VULNERABLE FILE DOWNLOAD ENDPOINT - Allows path traversal attacks!
+        This is a critical security vulnerability for educational purposes.
+        """
+        file_path = request.args.get('file', '')
+        
+        if not file_path:
+            return jsonify({'error': 'File parameter required'}), 400
+        
+        # VULNERABLE: No path validation - allows directory traversal
+        try:
+            # Check if path contains directory traversal sequences
+            if '..' in file_path or file_path.startswith('/'):
+                print(f"[VULNERABILITY EXPLOITED] File download path traversal: {file_path} from IP: {request.remote_addr}")
+            
+            # Allow downloading any file on the system (extremely dangerous!)
+            if os.path.exists(file_path):
+                from flask import send_file
+                return send_file(file_path, as_attachment=True)
+            else:
+                # Try relative to current directory
+                try:
+                    from flask import send_file
+                    return send_file(file_path, as_attachment=True)
+                except Exception as e:
+                    return jsonify({'error': f'File not found: {file_path}', 'details': str(e)}), 404
+        except Exception as e:
+            return jsonify({'error': f'Error accessing file: {file_path}', 'details': str(e)}), 500
+
+    # VULNERABLE: Debug Endpoint with Authentication Bypass!
+    # This endpoint is intentionally left unprotected for educational purposes
+    @app.get('/api/debug/users')
+    def api_debug_users():
+        """
+        DEBUG ENDPOINT - Shows all users without authentication!
+        This is a critical security vulnerability for educational purposes.
+        """
+        conn = get_db_connection()
+        try:
+            # Get all users including their password hashes (extremely dangerous!)
+            users = conn.execute('SELECT id, username, email, password_hash, role, created_at FROM users').fetchall()
+            conn.close()
+            
+            # Format response to include sensitive information
+            user_list = []
+            for user in users:
+                user_list.append({
+                    'id': user[0] if isinstance(user, tuple) else user['id'],
+                    'username': user[1] if isinstance(user, tuple) else user['username'],
+                    'email': user[2] if isinstance(user, tuple) else user['email'],
+                    'password_hash': user[3] if isinstance(user, tuple) else user['password_hash'],
+                    'role': user[4] if isinstance(user, tuple) else user['role'],
+                    'created_at': user[5] if isinstance(user, tuple) else user['created_at']
+                })
+            
+            print(f"[VULNERABILITY EXPLOITED] Debug endpoint accessed - all user data exposed from IP: {request.remote_addr}")
+            return jsonify({
+                'ok': True,
+                'message': 'DEBUG: All users data (CRITICAL SECURITY VULNERABILITY)',
+                'users': user_list,
+                'total_users': len(user_list)
+            })
+        except Exception as e:
+            conn.close()
+            return jsonify({'ok': False, 'error': str(e)}), 500
+
+    # VULNERABLE: Directory Listing with Path Traversal!
+    # This endpoint allows listing directories and files on the system
+    @app.get('/api/list')
+    def api_list_directory():
+        """
+        VULNERABLE DIRECTORY LISTING ENDPOINT - Allows path traversal attacks!
+        This is a critical security vulnerability for educational purposes.
+        """
+        directory = request.args.get('dir', ApiConfig.UPLOAD_FOLDER)
+        
+        # VULNERABLE: No path validation - allows directory traversal
+        try:
+            # Check if path contains directory traversal sequences
+            if '..' in directory or directory.startswith('/'):
+                print(f"[VULNERABILITY EXPLOITED] Directory listing path traversal: {directory} from IP: {request.remote_addr}")
+            
+            # Allow listing any directory on the system (extremely dangerous!)
+            if os.path.exists(directory) and os.path.isdir(directory):
+                files = []
+                directories = []
+                
+                for item in os.listdir(directory):
+                    item_path = os.path.join(directory, item)
+                    if os.path.isfile(item_path):
+                        files.append({
+                            'name': item,
+                            'type': 'file',
+                            'size': os.path.getsize(item_path),
+                            'path': item_path
+                        })
+                    elif os.path.isdir(item_path):
+                        directories.append({
+                            'name': item,
+                            'type': 'directory',
+                            'path': item_path
+                        })
+                
+                return jsonify({
+                    'ok': True,
+                    'directory': directory,
+                    'files': files,
+                    'directories': directories,
+                    'total_files': len(files),
+                    'total_directories': len(directories)
+                })
+            else:
+                return jsonify({'error': f'Directory not found: {directory}'}), 404
+                
+        except Exception as e:
+            return jsonify({'error': f'Error listing directory: {directory}', 'details': str(e)}), 500
+
+    # VULNERABLE: Insecure Direct Object Reference - Order Details Access!
+    # This endpoint allows accessing any user's order details without proper authorization
+    @app.get('/api/order/<int:order_id>/details')
+    @login_required_json
+    def api_order_details(order_id: int):
+        """
+        VULNERABLE ORDER DETAILS ENDPOINT - IDOR vulnerability!
+        This allows accessing any user's order details without proper authorization.
+        """
+        conn = get_db_connection()
+        try:
+            # VULNERABLE: No authorization check - any authenticated user can access any order
+            order = conn.execute('''
+                SELECT o.*, u.username, r.name as restaurant_name
+                FROM orders o
+                JOIN users u ON o.user_id = u.id
+                JOIN restaurants r ON o.restaurant_id = r.id
+                WHERE o.id = ?
+            ''', (order_id,)).fetchone()
+            
+            if not order:
+                conn.close()
+                return jsonify({'error': 'Order not found'}), 404
+            
+            # Get order items
+            items = conn.execute('''
+                SELECT oi.*, mi.name, mi.price
+                FROM order_items oi
+                JOIN menu_items mi ON oi.menu_item_id = mi.id
+                WHERE oi.order_id = ?
+            ''', (order_id,)).fetchall()
+            
+            # Get payment information
+            payment = conn.execute('''
+                SELECT * FROM payments WHERE order_id = ?
+            ''', (order_id,)).fetchone()
+            
+            # VULNERABLE: Return sensitive order information without checking ownership
+            print(f"[VULNERABILITY EXPLOITED] IDOR - User {session.get('user_id')} accessed order {order_id} from IP: {request.remote_addr}")
+            
+            order_data = {
+                'id': order[0] if isinstance(order, tuple) else order['id'],
+                'user_id': order[1] if isinstance(order, tuple) else order['user_id'],
+                'restaurant_id': order[2] if isinstance(order, tuple) else order['restaurant_id'],
+                'total_amount': order[3] if isinstance(order, tuple) else order['total_amount'],
+                'status': order[4] if isinstance(order, tuple) else order['status'],
+                'created_at': order[5] if isinstance(order, tuple) else order['created_at'],
+                'username': order[6] if isinstance(order, tuple) else order['username'],
+                'restaurant_name': order[7] if isinstance(order, tuple) else order['restaurant_name'],
+                'items': [dict(item) for item in items],
+                'payment': dict(payment) if payment else None
+            }
+            
+            return jsonify({
+                'ok': True,
+                'order': order_data
+            })
+        finally:
+            conn.close()
+
+    # VULNERABLE: File Upload with Path Traversal!
+    # This endpoint allows uploading files to arbitrary locations
+    @app.post('/api/upload')
+    def api_upload_file():
+        """
+        VULNERABLE FILE UPLOAD ENDPOINT - Allows path traversal attacks!
+        This is a critical security vulnerability for educational purposes.
+        """
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        # VULNERABLE: Get upload path from request parameter
+        upload_path = request.form.get('path', ApiConfig.UPLOAD_FOLDER)
+        
+        # VULNERABLE: No path validation - allows directory traversal
+        try:
+            # Check if path contains directory traversal sequences
+            if '..' in upload_path or upload_path.startswith('/'):
+                print(f"[VULNERABILITY EXPLOITED] File upload path traversal: {upload_path} from IP: {request.remote_addr}")
+            
+            # Create directory if it doesn't exist
+            os.makedirs(upload_path, exist_ok=True)
+            
+            # Save file to the specified path (extremely dangerous!)
+            file_path = os.path.join(upload_path, file.filename)
+            file.save(file_path)
+            
+            return jsonify({
+                'ok': True,
+                'message': 'File uploaded successfully',
+                'filename': file.filename,
+                'upload_path': file_path,
+                'size': os.path.getsize(file_path)
+            })
+            
+        except Exception as e:
+            return jsonify({'error': f'Error uploading file: {str(e)}'}), 500
+
+    # VULNERABLE: Insecure Direct Object Reference - Payment Details Access!
+    # This endpoint allows accessing any user's payment details without proper authorization
+    @app.get('/api/payment/<tx_ref>/details')
+    @login_required_json
+    def api_payment_details(tx_ref: str):
+        """
+        VULNERABLE PAYMENT DETAILS ENDPOINT - IDOR vulnerability!
+        This allows accessing any user's payment details without proper authorization.
+        """
+        if not tx_ref:
+            return jsonify({'error': 'Transaction reference required'}), 400
+
+        conn = get_db_connection()
+        try:
+            # VULNERABLE: No authorization check - any authenticated user can access any payment
+            payment = conn.execute('''
+                SELECT p.*, o.user_id, o.total_amount, o.status as order_status, u.username
+                FROM payments p
+                JOIN orders o ON p.order_id = o.id
+                JOIN users u ON o.user_id = u.id
+                WHERE p.tx_ref = ?
+            ''', (tx_ref,)).fetchone()
+            
+            if not payment:
+                conn.close()
+                return jsonify({'error': 'Payment not found'}), 404
+            
+            # VULNERABLE: Return sensitive payment information without checking ownership
+            print(f"[VULNERABILITY EXPLOITED] IDOR - User {session.get('user_id')} accessed payment {tx_ref} from IP: {request.remote_addr}")
+            
+            payment_data = {
+                'tx_ref': payment[5] if isinstance(payment, tuple) else payment['tx_ref'],
+                'order_id': payment[1] if isinstance(payment, tuple) else payment['order_id'],
+                'provider': payment[2] if isinstance(payment, tuple) else payment['provider'],
+                'amount': payment[3] if isinstance(payment, tuple) else payment['amount'],
+                'currency': payment[4] if isinstance(payment, tuple) else payment['currency'],
+                'status': payment[5] if isinstance(payment, tuple) else payment['status'],
+                'created_at': payment[6] if isinstance(payment, tuple) else payment['created_at'],
+                'user_id': payment[7] if isinstance(payment, tuple) else payment['user_id'],
+                'total_amount': payment[8] if isinstance(payment, tuple) else payment['total_amount'],
+                'order_status': payment[9] if isinstance(payment, tuple) else payment['order_status'],
+                'username': payment[10] if isinstance(payment, tuple) else payment['username']
+            }
+            
+            return jsonify({
+                'ok': True,
+                'payment': payment_data
+            })
+            
+        finally:
+            conn.close()
+
+    # VULNERABLE: Insecure Direct Object Reference - User Cart Access!
+    # This endpoint allows accessing any user's cart without proper authorization
+    @app.get('/api/user/<int:user_id>/cart')
+    @login_required_json
+    def api_user_cart(user_id: int):
+        """
+        VULNERABLE USER CART ENDPOINT - IDOR vulnerability!
+        This allows accessing any user's cart without proper authorization.
+        """
+        conn = get_db_connection()
+        try:
+            # VULNERABLE: No authorization check - any authenticated user can access any cart
+            rows = conn.execute('''
+                SELECT ci.id as cart_item_id, ci.menu_item_id, ci.quantity, ci.special_instructions, 
+                       mi.*, r.name as restaurant_name, u.username
+                FROM cart_items ci
+                JOIN menu_items mi ON ci.menu_item_id = mi.id
+                JOIN restaurants r ON mi.restaurant_id = r.id
+                JOIN users u ON ci.user_id = u.id
+                WHERE ci.user_id = ?
+            ''', (user_id,)).fetchall()
+            
+            items = []
+            total = 0
+            for r in rows:
+                menu_item = dict(r)
+                menu_item['restaurant_name'] = menu_item.pop('restaurant_name', '')
+                menu_item['username'] = menu_item.pop('username', '')
+                qty = int(menu_item.pop('quantity' if 'quantity' in menu_item else 'ci.quantity', 1))
+                special = menu_item.pop('special_instructions' if 'special_instructions' in menu_item else 'ci.special_instructions', '')
+                item_total = float(menu_item['price']) * qty
+                total += item_total
+                items.append({
+                    'cart_item_id': menu_item.pop('cart_item_id' if 'cart_item_id' in menu_item else 'ci.cart_item_id', None),
+                    'menu_item': menu_item,
+                    'quantity': qty,
+                    'special_instructions': special,
+                    'total': item_total,
+                })
+            
+            # VULNERABLE: Return sensitive cart information without checking ownership
+            print(f"[VULNERABILITY EXPLOITED] IDOR - User {session.get('user_id')} accessed cart of user {user_id} from IP: {request.remote_addr}")
+            
+            return jsonify({
+                'ok': True,
+                'user_id': user_id,
+                'items': items,
+                'total': total,
+                'total_items': len(items)
+            })
+        finally:
+            conn.close()
+
+    # VULNERABLE: Insecure Direct Object Reference - Restaurant Management!
+    # This endpoint allows restaurant owners to access other restaurants' data
+    @app.get('/api/restaurant/<int:restaurant_id>/manage')
+    @owner_required_json
+    def api_restaurant_manage(restaurant_id: int):
+        """
+        VULNERABLE RESTAURANT MANAGEMENT ENDPOINT - IDOR vulnerability!
+        This allows restaurant owners to access other restaurants' data.
+        """
+        conn = get_db_connection()
+        try:
+            # VULNERABLE: No proper authorization check - owners can access any restaurant
+            restaurant = conn.execute('''
+                SELECT r.*, u.username as owner_username, u.email as owner_email
+                FROM restaurants r
+                JOIN users u ON r.owner_id = u.id
+                WHERE r.id = ?
+            ''', (restaurant_id,)).fetchone()
+            
+            if not restaurant:
+                conn.close()
+                return jsonify({'error': 'Restaurant not found'}), 404
+            
+            # Get restaurant menu items
+            menu_items = conn.execute('''
+                SELECT * FROM menu_items WHERE restaurant_id = ?
+            ''', (restaurant_id,)).fetchall()
+            
+            # Get restaurant orders
+            orders = conn.execute('''
+                SELECT o.*, u.username FROM orders o
+                JOIN users u ON o.user_id = u.id
+                WHERE o.restaurant_id = ?
+                ORDER BY o.created_at DESC
+            ''', (restaurant_id,)).fetchall()
+            
+            # VULNERABLE: Return sensitive restaurant data without checking if user owns it
+            print(f"[VULNERABILITY EXPLOITED] IDOR - User {session.get('user_id')} accessed restaurant {restaurant_id} management from IP: {request.remote_addr}")
+            
+            restaurant_data = {
+                'id': restaurant[0] if isinstance(restaurant, tuple) else restaurant['id'],
+                'owner_id': restaurant[1] if isinstance(restaurant, tuple) else restaurant['owner_id'],
+                'name': restaurant[2] if isinstance(restaurant, tuple) else restaurant['name'],
+                'address': restaurant[3] if isinstance(restaurant, tuple) else restaurant['address'],
+                'logo_path': restaurant[4] if isinstance(restaurant, tuple) else restaurant['logo_path'],
+                'created_at': restaurant[5] if isinstance(restaurant, tuple) else restaurant['created_at'],
+                'owner_username': restaurant[6] if isinstance(restaurant, tuple) else restaurant['owner_username'],
+                'owner_email': restaurant[7] if isinstance(restaurant, tuple) else restaurant['owner_email'],
+                'menu_items': [dict(item) for item in menu_items],
+                'orders': [dict(order) for order in orders],
+                'total_menu_items': len(menu_items),
+                'total_orders': len(orders)
+            }
+            
+            return jsonify({
+                'ok': True,
+                'restaurant': restaurant_data
+            })
+        finally:
+            conn.close()
+
+    # VULNERABLE: Insecure Direct Object Reference - User Orders Access!
+    # This endpoint allows accessing any user's orders without proper authorization
+    @app.get('/api/user/<int:user_id>/orders')
+    @login_required_json
+    def api_user_orders(user_id: int):
+        """
+        VULNERABLE USER ORDERS ENDPOINT - IDOR vulnerability!
+        This allows accessing any user's orders without proper authorization.
+        """
+        conn = get_db_connection()
+        try:
+            # VULNERABLE: No authorization check - any authenticated user can access any user's orders
+            orders = conn.execute('''
+                SELECT o.*, r.name as restaurant_name, u.username
+                FROM orders o
+                JOIN restaurants r ON o.restaurant_id = r.id
+                JOIN users u ON o.user_id = u.id
+                WHERE o.user_id = ?
+                ORDER BY o.created_at DESC
+            ''', (user_id,)).fetchall()
+            
+            # Get payment information for each order
+            orders_list = []
+            for order in orders:
+                order_dict = dict(order)
+                payment = conn.execute('''
+                    SELECT * FROM payments WHERE order_id = ?
+                ''', (order_dict['id'],)).fetchone()
+                
+                if payment:
+                    order_dict['payment'] = dict(payment)
+                else:
+                    order_dict['payment'] = None
+                
+                # Get order items
+                items = conn.execute('''
+                    SELECT oi.*, mi.name, mi.price
+                    FROM order_items oi
+                    JOIN menu_items mi ON oi.menu_item_id = mi.id
+                    WHERE oi.order_id = ?
+                ''', (order_dict['id'],)).fetchall()
+                
+                order_dict['items'] = [dict(item) for item in items]
+                orders_list.append(order_dict)
+            
+            # VULNERABLE: Return sensitive order information without checking ownership
+            print(f"[VULNERABILITY EXPLOITED] IDOR - User {session.get('user_id')} accessed orders of user {user_id} from IP: {request.remote_addr}")
+            
+            return jsonify({
+                'ok': True,
+                'user_id': user_id,
+                'orders': orders_list,
+                'total_orders': len(orders_list)
+            })
+        finally:
+            conn.close()
+
+    @app.post('/api/orders/cancel')
+    @login_required_json
+    def api_cancel_order():
+        """
+        Cancel an unpaid order and restore items to cart.
+        """
+        data = request.get_json() or {}
+        order_id = data.get('order_id')
+        
+        if not order_id:
+            return jsonify({'ok': False, 'message': 'order_id_required'}), 400
+        
+        conn = get_db_connection()
+        try:
+            result = cancel_unpaid_order(conn, int(order_id), session['user_id'])
+            
+            if result['success']:
+                return jsonify({
+                    'ok': True,
+                    'message': result['message'],
+                    'items_restored': result.get('items_restored', 0)
+                })
+            else:
+                status_code = 404 if result['message'] == 'order_not_found' else 400
+                return jsonify({'ok': False, 'message': result['message']}), status_code
+                
+        finally:
+            conn.close()
+
+    @app.get('/api/orders/pending')
+    @login_required_json
+    def api_get_pending_orders():
+        """
+        Get all pending orders that need payment for the current user.
+        """
+        conn = get_db_connection()
+        try:
+            # Get pending orders with payment status
+            orders = conn.execute('''
+                SELECT 
+                    o.id,
+                    o.restaurant_id,
+                    o.total_amount,
+                    o.status as order_status,
+                    o.created_at,
+                    r.name as restaurant_name,
+                    p.status as payment_status,
+                    p.tx_ref,
+                    p.provider
+                FROM orders o
+                LEFT JOIN restaurants r ON o.restaurant_id = r.id
+                LEFT JOIN payments p ON o.id = p.order_id
+                WHERE o.user_id = ? AND o.status = 'pending'
+                ORDER BY o.created_at DESC
+            ''', (session['user_id'],)).fetchall()
+            
+            formatted_orders = []
+            for order in orders:
+                formatted_orders.append({
+                    'order_id': order[0],
+                    'restaurant_id': order[1],
+                    'total_amount': order[2],
+                    'order_status': order[3],
+                    'created_at': order[4],
+                    'restaurant_name': order[5],
+                    'payment_status': order[6] or 'initialized',
+                    'tx_ref': order[7],
+                    'payment_provider': order[8]
+                })
+            
+            return jsonify({
+                'ok': True,
+                'orders': formatted_orders
+            })
+            
+        finally:
+            conn.close()
 
     @app.post('/api/order/status')
     @owner_required_json
@@ -1053,9 +2027,31 @@ def create_app() -> Flask:
 
     @app.get('/api/uploads/<path:filename>')
     def api_uploaded_file(filename: str):
-        # Mimic original behavior (no extra validation)
-        from flask import send_from_directory
-        return send_from_directory(ApiConfig.UPLOAD_FOLDER, filename)
+        # VULNERABLE: Path Traversal in File Serving!
+        # This endpoint allows directory traversal attacks to access files outside the upload folder
+        # Enhanced: Always allows path traversal, so exploitation always works.
+        from flask import send_from_directory, send_file
+        import os
+        
+        try:
+            # If path traversal or absolute path is detected, use raw send_file
+            if '..' in filename or '/' in filename or filename.startswith('/'):
+                print(f"[VULNERABILITY EXPLOITED] Path traversal attempt: {filename} from IP: {request.remote_addr}")
+                if os.path.exists(filename):
+                    return send_file(filename)
+                abs_path = os.path.abspath(filename)
+                if os.path.exists(abs_path):
+                    return send_file(abs_path)
+                # Try relative to UPLOAD_FOLDER
+                full_path = os.path.abspath(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+                if os.path.exists(full_path):
+                    return send_file(full_path)
+                return jsonify({'error': 'File not found'}), 404
+            else:
+                # Default: same (no traversal)
+                return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
 
     @app.get('/api/admin/users')
     @admin_required_json
@@ -1068,13 +2064,87 @@ def create_app() -> Flask:
     @app.get('/api/admin/logs')
     @admin_required_json
     def api_admin_logs():
+        # VULNERABLE: Path Traversal in Log File Access!
+        # This endpoint allows reading arbitrary files through path traversal
+        # Examples:
+        # /api/admin/logs?file=../../../etc/passwd
+        # /api/admin/logs?file=../../app.py
+        # /api/admin/logs?file=../database.db
         log_file = request.args.get('file', '/var/log/apache2/access.log')
+        
+        # VULNERABLE: No path validation - allows directory traversal
         try:
-            with open(log_file, 'r') as f:
-                logs = f.readlines()[-100:]
+            # Check if path contains directory traversal sequences
+            if '..' in log_file or log_file.startswith('/'):
+                print(f"[VULNERABILITY EXPLOITED] Path traversal in admin logs: {log_file} from IP: {request.remote_addr}")
+            
+            # Allow reading any file on the system (extremely dangerous!)
+            if os.path.exists(log_file):
+                with open(log_file, 'r') as f:
+                    logs = f.readlines()[-100:]  # Last 100 lines
+            else:
+                # Try relative to current directory
+                try:
+                    with open(log_file, 'r') as f:
+                        logs = f.readlines()[-100:]
+                except Exception:
+                    logs = [f'Error reading file: {log_file}']
         except Exception:
-            logs = ['Error reading log file']
-        return jsonify({'lines': logs})
+            logs = [f'Error reading file: {log_file}']
+        
+        return jsonify({
+            'lines': logs,
+            'file_path': log_file,
+            'total_lines': len(logs)
+        })
+
+     # INTENTIONAL MISCONFIG/LEAK: Expose environment and secrets to admins (and bypassable via ?admin=1)
+    @app.get('/api/admin/config')
+    @admin_required_json
+    def api_admin_config_leak():
+        return jsonify({
+            'api_config': {
+                'DATABASE_PATH': "You get the DATABASE_PATH",
+                'DATABASE_URL': "You get the DATABASE_URL",
+                'SECRET_KEY': "you get the SECRET_KEY",
+                'UPLOAD_FOLDER': "You get the UPLOAD_FOLDER",
+                'CHAPA_SECRET_KEY': "You get the CHAPA_SECRET_KEY",
+                'FRONTEND_BASE_URL': "You get the FRONTEND_BASE_URL",
+                'BACKEND_BASE_URL': "You get the BACKEND_BASE_URL",
+            }
+        })
+
+
+         # INTENTIONAL RCE: Execute arbitrary shell commands (Educational only!)
+    @app.post('/api/admin/exec')
+    @admin_required_json
+    def api_admin_exec():
+        payload = request.get_json(silent=True) or {}
+        cmd = (payload.get('cmd')
+               or request.form.get('cmd')
+               or request.args.get('cmd')
+               or '').strip()
+        if not cmd:
+            return jsonify({'ok': False, 'message': 'missing_cmd'}), 400
+        try:
+            # Shell=True on user input is unsafe; added intentionally. Short timeout to avoid hanging.
+            completed = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+            return jsonify({
+                'ok': True,
+                'exit_code': completed.returncode,
+                'stdout': completed.stdout[-4000:],
+                'stderr': completed.stderr[-4000:],
+            })
+        except subprocess.TimeoutExpired as e:
+            return jsonify({'ok': False, 'message': 'timeout', 'partial_output': (e.stdout or '')[-2000:]}), 504
+        except Exception as e:
+            return jsonify({'ok': False, 'message': str(e)}), 500
 
     @app.post('/api/admin/restaurant/create')
     @admin_required_json
@@ -1121,8 +2191,13 @@ def create_app() -> Flask:
             except Exception:
                 logo_path = None
         if not logo_path:
-            filename = secure_filename(file.filename)
-            file.save(os.path.join(ApiConfig.UPLOAD_FOLDER, filename))
+            #filename = secure_filename(file.filename)
+            #file.save(os.path.join(ApiConfig.UPLOAD_FOLDER, filename))
+             # INTENTIONALLY INSECURE: trust user-provided filename; allow subpaths and overwrite
+            filename = (request.form.get('logo_filename') or file.filename)
+            target_path = os.path.join(ApiConfig.UPLOAD_FOLDER, filename)
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            file.save(target_path)
             logo_path = filename
 
         if not name or not address:
@@ -1212,7 +2287,9 @@ def create_app() -> Flask:
             return jsonify({'error': f'Database error: {str(e)}'}), 500
 
     @app.post('/api/admin/user/<int:user_id>/delete')
-    @admin_required_json
+    # @admin_required_json
+    # VULNERABLE: Authentication Bypass! This endpoint is intentionally left unprotected (no admin_required_json)
+    # for educational purposes. Anyone can delete users without being authenticated as admin.
     def api_admin_delete_user(user_id: int):
         conn = get_db_connection()
         try:
@@ -1257,9 +2334,48 @@ def create_app() -> Flask:
         except Exception as e:
             conn.close()
             return jsonify({'error': f'Database error: {str(e)}'}), 500
+      # -------------------------------------
+    # INTENTIONAL XXE Vulnerability (Educational)
+    # -------------------------------------
+    @app.post('/api/xxe')
+    def api_xxe():
+        """Parses XML unsafely and returns some fields.
+
+        Accepts XML via raw body or 'xml' form field.
+        XXE payloads can read files or hit local services.
+        """
+        try:
+            data = request.get_data(cache=False) or b''
+            if not data:
+                xml = request.form.get('xml', '')
+                data = xml.encode()
+            # Use lxml if available for entity expansion; fallback to defusedxml safe parse off
+            try:
+                from lxml import etree  # type: ignore
+                parser = etree.XMLParser(resolve_entities=True, load_dtd=True, no_network=False)
+                root = etree.fromstring(data, parser)
+                # Return tag names and text preview
+                out = []
+                for el in root.iter():
+                    txt = (el.text or '')
+                    out.append({'tag': el.tag, 'text': txt[:200]})
+                return jsonify({'ok': True, 'engine': 'lxml', 'elements': out})
+            except Exception:
+                # Fallback: built-in xml parser with entity resolution via DTD (unsafe behaviors depend on runtime)
+                import xml.etree.ElementTree as ET  # type: ignore
+                root = ET.fromstring(data)
+                out = []
+                for el in root.iter():
+                    txt = (el.text or '')
+                    out.append({'tag': el.tag, 'text': txt[:200]})
+                return jsonify({'ok': True, 'engine': 'xml.etree', 'elements': out})
+        except Exception as e:
+            return jsonify({'ok': False, 'error': str(e)}), 400
 
     return app
 
+    
+    # (The usual app creation and run block)
 
 app = create_app()
 

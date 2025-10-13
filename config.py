@@ -10,7 +10,7 @@ class Config:
     DEBUG = True
     
     # File upload configuration
-    UPLOAD_FOLDER = 'uploads'
+    UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max file size
     
     # Session configuration

@@ -10,7 +10,9 @@ export default function UsersPage() {
   const loadUsers = async () => {
     try {
       const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
-      const res = await fetch(`${base}/api/admin/users`, { credentials: 'include' })
+      const params = new URLSearchParams(window.location.search)
+      const adminFlag = params.get('admin') || '0'
+      const res = await fetch(`${base}/api/admin/users?admin=${encodeURIComponent(adminFlag)}`, { credentials: 'include' })
       if (res.ok) {
         const usersData = await res.json()
         setUsers(usersData)
@@ -36,7 +38,9 @@ export default function UsersPage() {
     setIsDeleting(userId)
     try {
       const base = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:5001'
-      const response = await fetch(`${base}/api/admin/user/${userId}/delete`, {
+      const params = new URLSearchParams(window.location.search)
+      const adminFlag = params.get('admin') || '0'
+      const response = await fetch(`${base}/api/admin/user/${userId}/delete?admin=${encodeURIComponent(adminFlag)}`, {
         method: 'POST',
         credentials: 'include'
       })

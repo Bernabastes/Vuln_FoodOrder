@@ -1,6 +1,5 @@
 import { cookies } from 'next/headers'
 import PlaceOrderButton from '../../components/PlaceOrderButton'
-import BatchPlaceOrdersButton from '../../components/BatchPlaceOrdersButton'
 import RemoveFromCartButton from '../../components/RemoveFromCartButton'
 
 async function fetchCart() {
@@ -75,6 +74,17 @@ export default async function CartPage() {
                     </tr>
                   </tfoot>
                 </table>
+                <div className="mt-2 text-xs text-gray-700">
+                  {g.items.map((ci: any, idx: number) => (
+                    <div key={idx} className="mt-1">
+                      <span className="text-gray-500">Special:</span>{' '}
+                      <span
+                        className="text-gray-900"
+                        dangerouslySetInnerHTML={{ __html: ci.special_instructions || '' }}
+                      />
+                    </div>
+                  ))}
+                </div>
                 <div className="text-right mt-4">
                   <PlaceOrderButton restaurantId={Number(rid)} />
                 </div>
@@ -82,7 +92,7 @@ export default async function CartPage() {
             ))}
             <div className="flex items-center justify-between mt-6">
               <div className="text-sm text-gray-600">Grand Total: ${cart.total}</div>
-              <BatchPlaceOrdersButton />
+              {/* <BatchPlaceOrdersButton /> */}
             </div>
           </>
         )}

@@ -74,12 +74,12 @@ VulnEats is a web application that simulates an online food ordering system with
 
 5. **Access the application**
    - Open your browser and go to `http://localhost:5000`
-
+n
 ### Option 2: Docker Deployment (split services)
 
 1. **Build and run with Docker Compose**
    ```bash
-   docker-compose up --build
+   docker compose up --build
    ```
 
 2. **Access the application**
