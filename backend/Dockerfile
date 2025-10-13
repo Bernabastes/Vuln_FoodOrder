@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-WORKDIR /app
+WORKDIR /backend
 
 # Install system dependencies
 RUN apt-get update \
