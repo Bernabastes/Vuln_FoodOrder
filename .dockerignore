@@ -1,0 +1,97 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+README.md
+AUTHENTICATION_BYPASS_GUIDE.md
+CSRFREADME.md
+IDOR_GUIDE.md
+PATH_TRAVERSAL_GUIDE.md
+PAYMENT_SYSTEM_GUIDE.md
+SECURITY_TESTING_GUIDE.md
+SETUP_COMPLETE.md
+RENDER_DEPLOYMENT_GUIDE.md
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+env.example
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env
+pip-log.txt
+pip-delete-this-directory.txt
+.tox
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.git
+.mypy_cache
+.pytest_cache
+.hypothesis
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Node.js (for frontend)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Next.js
+.next/
+out/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Uploads (will be mounted as volume)
+uploads/
+
+# Build artifacts
+dist/
+build/

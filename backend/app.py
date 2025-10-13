@@ -522,6 +522,26 @@ def create_app() -> Flask:
         wrapper.__name__ = fn.__name__
         return wrapper
 
+    # Health check endpoint for Render
+    @app.get("/api/health")
+    def health_check():
+        try:
+            # Test database connection
+            conn = get_db_connection()
+            conn.close()
+            return jsonify({
+                "status": "healthy",
+                "database": "connected",
+                "service": "vulneats-backend"
+            }), 200
+        except Exception as e:
+            return jsonify({
+                "status": "unhealthy",
+                "database": "disconnected",
+                "error": str(e),
+                "service": "vulneats-backend"
+            }), 503
+
     @app.post("/api/login")
     def api_login():
         data = request.get_json() or {}

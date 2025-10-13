@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "5001:5001"
+    environment:
+      - FLASK_ENV=production
+      - FLASK_APP=app.py
+      - PYTHONPATH=/app
+      - DATABASE_URL=${DATABASE_URL}
+      - SECRET_KEY=${SECRET_KEY}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - UPLOAD_FOLDER=/app/uploads
+      - CHAPA_SECRET_KEY=${CHAPA_SECRET_KEY}
+      - CHAPA_PUBLIC_KEY=${CHAPA_PUBLIC_KEY}
+      - CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME}
+      - CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
+      - CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
+      - FRONTEND_BASE_URL=${FRONTEND_BASE_URL}
+      - BACKEND_BASE_URL=${BACKEND_BASE_URL}
+    volumes:
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_BASE=${BACKEND_BASE_URL}
+      - NODE_ENV=production
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # Optional: PostgreSQL database (if not using external database)
+  # Uncomment if you want to run PostgreSQL locally
+  # postgres:
+  #   image: postgres:15
+  #   environment:
+  #     - POSTGRES_DB=vulneats
+  #     - POSTGRES_USER=vulneats_user
+  #     - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   ports:
+  #     - "5432:5432"
+  #   restart: unless-stopped
+
+# volumes:
+#   postgres_data:
